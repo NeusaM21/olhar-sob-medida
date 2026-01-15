@@ -1,0 +1,172 @@
+{
+  "services": [
+    {
+      "name": "Sobrancelha",
+      "category": "Depilação",
+      "price": 45.0,
+      "description": "Design de sobrancelhas",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Buço",
+      "category": "Depilação",
+      "price": 18.0,
+      "description": "Design e limpeza do buço",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Axila",
+      "category": "Depilação",
+      "price": 23.0,
+      "description": "Depilação da axila",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Virilha Completa",
+      "category": "Depilação",
+      "price": 70.0,
+      "description": "Depilação completa da virilha",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Virilha Cavada",
+      "category": "Depilação",
+      "price": 65.0,
+      "description": "Depilação cavada da virilha",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Perna",
+      "category": "Depilação",
+      "price": 65.0,
+      "description": "Depilação de pernas",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Limpeza de Pele",
+      "category": "Estética Facial",
+      "price": 140.0,
+      "description": "Limpeza profunda da pele",
+      "duration_minutes": 90
+    },
+    {
+      "name": "Peeling Quartzo Adcos",
+      "category": "Estética Facial",
+      "price": 150.0,
+      "description": "Peeling facial com quartzo",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Dermaplaning",
+      "category": "Estética Facial",
+      "price": 150.0,
+      "description": "Peeling e remoção de células mortas",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Lash Lifting",
+      "category": "Cílios & Sobrancelhas",
+      "price": 140.0,
+      "description": "Lifting de cílios",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Brow Lamination",
+      "category": "Cílios & Sobrancelhas",
+      "price": 120.0,
+      "description": "Laminação de sobrancelhas",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Buço na Linha",
+      "category": "Design na Linha",
+      "price": 25.0,
+      "description": "Design de buço na linha",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Rosto na Linha",
+      "category": "Design na Linha",
+      "price": 60.0,
+      "description": "Design e cuidados para a linha do rosto",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Esfoliação Corporal",
+      "category": "Tratamentos Corporais",
+      "price": 85.0,
+      "description": "Esfoliação de todo o corpo",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Drenagem Avulsa",
+      "category": "Tratamentos Corporais",
+      "price": "Pacote a consultar",
+      "description": "Drenagem linfática avulsa",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Banho de Lua",
+      "category": "Tratamentos Corporais",
+      "price": 150.0,
+      "description": "Clareamento corporal com hidratação",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Alongamento em Fibra de Vidro",
+      "category": "Nail Designer",
+      "price": 180.0,
+      "description": "Alongamento de unhas com fibra de vidro",
+      "duration_minutes": 120
+    },
+    {
+      "name": "Alongamento na Tips",
+      "category": "Nail Designer",
+      "price": 120.0,
+      "description": "Alongamento de unhas com tips",
+      "duration_minutes": 120
+    },
+    {
+      "name": "Banho de Gel",
+      "category": "Nail Designer",
+      "price": 100.0,
+      "description": "Unhas com aplicação de banho de gel",
+      "duration_minutes": 90
+    },
+    {
+      "name": "Blindagem",
+      "category": "Nail Designer",
+      "price": 80.0,
+      "description": "Blindagem de unhas",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Mão Comum",
+      "category": "Manicure & Pedicure",
+      "price": 35.0,
+      "description": "Manicure comum",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Pé Comum",
+      "category": "Manicure & Pedicure",
+      "price": 40.0,
+      "description": "Pedicure comum",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Pé e Mão Comum",
+      "category": "Manicure & Pedicure",
+      "price": 70.0,
+      "description": "Manicure e pedicure comum",
+      "duration_minutes": 60
+    },
+    {
+      "name": "Spa dos Pés",
+      "category": "Manicure & Pedicure",
+      "price": 80.0,
+      "description": "Tratamento SPA para os pés",
+      "duration_minutes": 60
+    }
+  ]
+}

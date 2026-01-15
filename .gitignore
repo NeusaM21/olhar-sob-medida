@@ -1,0 +1,67 @@
+# =====================================================
+# Python Virtual Environments
+# =====================================================
+venv/
+.venv/
+ENV/
+
+# =====================================================
+# Node.js / Frontend Artifacts (NOT PART OF CORE PROJECT)
+# =====================================================
+node_modules/
+package.json
+package-lock.json
+automations/
+
+# =====================================================
+# Environment Variables & Secrets (CRITICAL)
+# Never commit real credentials. Use Render / env vars.
+# =====================================================
+.env
+.env.*
+credentials.json
+service_account.json
+*.key
+*.pem
+*.secret
+
+# =====================================================
+# Test & Local-Only Scripts (SECURITY)
+# Files used only for local testing or debugging
+# =====================================================
+test-models.js
+teste_ia.py
+teste_zap.py
+teste_zapi.py
+test_sheets.py
+configurar_senha.py
+debug.py
+ngrok.exe
+*.exe
+
+# =====================================================
+# Local Databases
+# =====================================================
+*.db
+*.db-journal
+*.sqlite3
+
+# =====================================================
+# Python Cache & OS Files
+# =====================================================
+__pycache__/
+*.py[cod]
+*~
+.DS_Store
+Thumbs.db
+
+# =====================================================
+# IDE & Editor Settings
+# =====================================================
+.vscode/
+.idea/
+
+# =====================================================
+# Allow public JSON data files (explicit whitelist)
+# =====================================================
+!data/*.json
