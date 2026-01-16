@@ -186,12 +186,12 @@ A demo acima mostra o sistema em funcionamento com:
 
 - Conversa real via WhatsApp  
 - Detecção de intenção pelo LLM  
-- Validação de serviços e agenda  
+- Validação de serviços e disponibilidade  
 - Agendamento automático  
-- Transferência para atendimento humano  
+- Transferência controlada para atendimento humano  
 - Retorno automático da IA após interação manual  
 
-👉 Demonstra um **pipeline de decisão controlado**, pronto para uso em ambiente real.
+👉 Demonstra um pipeline de decisão controlado, pronto para uso em ambiente real.
 
 <hr style="border: 0.5px solid #e5e5e5; margin: 20px 0;">
 

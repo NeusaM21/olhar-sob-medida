@@ -172,16 +172,16 @@ olhar-sob-medida/
 
 ![Demo](assets/demo.gif)
 
-The demo above shows the system running in a real scenario, including:
+The demo above shows the system in operation with:
 
 - Real WhatsApp conversation  
 - LLM-based intent detection  
-- Service and schedule validation  
-- Automatic booking  
-- Handoff to human support  
-- Automatic AI resume after manual interaction  
+- Service and availability validation  
+- Automated appointment scheduling  
+- Controlled handoff to human support  
+- Automatic AI takeover after manual interaction  
 
-👉 Demonstrates a **controlled decision pipeline**, ready for real-world production use.
+👉 Demonstrates a controlled decision-making pipeline, ready for real-world production use.
 
 <hr style="border: 0.5px solid #e5e5e5; margin: 20px 0;">
 
