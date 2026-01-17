@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.orm import Session
+import json
+from datetime import datetime
 
 from backend.db.session import get_db
-from backend.db.models import MessageLog
+from backend.db.models import MessageLog, ConversationSession
 from backend.ai.engine import generate_ai_response
 from backend.integrations.sheets import is_robot_muted
 from backend.core.utils import send_whatsapp_message
@@ -51,7 +53,7 @@ def extract_message_text(data: dict) -> str:
     return ""
 
 # --------------------------------------------------
-# 🆕 EXTRAÇÃO DO NOME DO REMETENTE (Z-API)
+# EXTRAÇÃO DO NOME DO REMETENTE (Z-API)
 # --------------------------------------------------
 
 def extract_sender_name(data: dict) -> str:
@@ -81,6 +83,102 @@ def extract_sender_name(data: dict) -> str:
         return name if name else None
     
     return None
+
+# --------------------------------------------------
+# 🆕 GERENCIAMENTO DE SESSÃO DE CONVERSA
+# --------------------------------------------------
+
+def get_or_create_session(db: Session, phone: str) -> ConversationSession:
+    """
+    Busca ou cria uma sessão de conversa para o cliente.
+    
+    Args:
+        db: Sessão do banco de dados
+        phone: Número de telefone do cliente
+    
+    Returns:
+        ConversationSession: Sessão ativa ou nova sessão criada
+    """
+    # Busca sessão existente
+    session = db.query(ConversationSession).filter(
+        ConversationSession.phone == phone
+    ).first()
+    
+    if session:
+        print(f"📂 Sessão encontrada: step={session.current_step}, status={session.status}")
+        return session
+    
+    # Cria nova sessão
+    print(f"🆕 Criando nova sessão para {phone}")
+    new_session = ConversationSession(
+        phone=phone,
+        current_step="initial",
+        conversation_data="{}",
+        status="active",
+        is_muted=False
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    
+    return new_session
+
+def update_session(
+    db: Session,
+    session: ConversationSession,
+    current_step: str = None,
+    conversation_data: dict = None,
+    status: str = None,
+    is_muted: bool = None
+):
+    """
+    Atualiza uma sessão de conversa existente.
+    
+    Args:
+        db: Sessão do banco de dados
+        session: Sessão a ser atualizada
+        current_step: Nova etapa da conversa (opcional)
+        conversation_data: Novos dados da conversa (opcional)
+        status: Novo status (opcional)
+        is_muted: Novo estado de mute (opcional)
+    """
+    if current_step is not None:
+        session.current_step = current_step
+        print(f"📝 Sessão atualizada: step → {current_step}")
+    
+    if conversation_data is not None:
+        session.conversation_data = json.dumps(conversation_data, ensure_ascii=False)
+        print(f"💾 Dados da conversa atualizados: {conversation_data}")
+    
+    if status is not None:
+        session.status = status
+        print(f"📊 Status atualizado: {status}")
+    
+    if is_muted is not None:
+        session.is_muted = is_muted
+        print(f"🔇 Mute atualizado: {is_muted}")
+    
+    session.last_interaction = datetime.now()
+    db.commit()
+    db.refresh(session)
+
+def parse_session_data(session: ConversationSession) -> dict:
+    """
+    Converte os dados JSON da sessão em dicionário Python.
+    
+    Args:
+        session: Sessão de conversa
+    
+    Returns:
+        dict: Dados da conversa ou dicionário vazio se inválido
+    """
+    try:
+        if session.conversation_data:
+            return json.loads(session.conversation_data)
+        return {}
+    except json.JSONDecodeError:
+        print("⚠️ Erro ao decodificar conversation_data, retornando dict vazio")
+        return {}
 
 # --------------------------------------------------
 # WEBHOOK PRINCIPAL (Z-API)
@@ -118,16 +216,46 @@ async def receive_webhook(
             print("🚫 Mensagem vazia após extração")
             return {"status": "empty"}
 
-        # ====================================================================
-        # 🆕 EXTRAI NOME DO REMETENTE (NOVO)
-        # ====================================================================
+        # Extrai nome do remetente
         sender_name = extract_sender_name(data)
         print(f"👤 Nome do remetente: {sender_name or 'Não identificado'}")
 
-        # Verifica mute do robô
-        if is_robot_muted(phone):
+        # ====================================================================
+        # 🆕 GERENCIAMENTO DE SESSÃO
+        # ====================================================================
+        
+        # Busca ou cria sessão para este cliente
+        session = get_or_create_session(db, phone)
+        
+        # Parse dos dados da conversa
+        session_data = parse_session_data(session)
+        
+        # Verifica se robô está mutado
+        robot_muted = is_robot_muted(phone)
+        
+        if robot_muted:
             print(f"🔇 Robô mutado para: {phone} ({sender_name or 'sem nome'})")
+            
+            # Atualiza sessão para indicar que está em atendimento humano
+            if not session.is_muted:
+                update_session(
+                    db=db,
+                    session=session,
+                    is_muted=True,
+                    status="waiting_human"
+                )
+            
             return {"status": "muted"}
+        
+        # Se robô estava mutado e agora foi desmutado
+        if session.is_muted and not robot_muted:
+            print(f"🔊 Robô desmutado para: {phone} - Retomando conversa...")
+            update_session(
+                db=db,
+                session=session,
+                is_muted=False,
+                status="active"
+            )
 
         # Log de entrada
         db.add(
@@ -140,13 +268,17 @@ async def receive_webhook(
         db.commit()
 
         # ====================================================================
-        # 🆕 CHAMADA DO ENGINE COM SENDER_NAME (MODIFICADO)
+        # 🆕 CHAMADA DO ENGINE COM CONTEXTO COMPLETO
         # ====================================================================
         print(f"🤖 Chamando engine para {phone} ({sender_name or 'sem nome'})...")
+        print(f"📋 Contexto: step={session.current_step}, data={session_data}")
+        
         ai_response = generate_ai_response(
             phone=phone,
             message=message,
-            sender_name=sender_name  # 🆕 NOVO PARÂMETRO
+            sender_name=sender_name,
+            current_step=session.current_step,  # 🆕 Etapa atual
+            session_data=session_data  # 🆕 Dados da conversa
         )
 
         if ai_response:
@@ -161,6 +293,15 @@ async def receive_webhook(
                 )
             )
             db.commit()
+            
+            # ====================================================================
+            # 🆕 ATUALIZAÇÃO DA SESSÃO APÓS RESPOSTA
+            # ====================================================================
+            # Nota: O engine deve retornar também o novo estado da conversa
+            # Por enquanto, apenas atualizamos o timestamp de last_interaction
+            # que é feito automaticamente no update_session
+            
+            print("✅ Resposta enviada e sessão atualizada")
 
         return {"status": "ok"}
 
