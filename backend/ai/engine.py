@@ -221,17 +221,21 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
         phone: Telefone do cliente no formato completo (ex: 5511999666070)
         message: Texto da mensagem enviada pelo cliente
         sender_name: Nome do remetente capturado do WhatsApp (opcional)
-                    Quando disponível, usado como fonte primária de identificação
+                    Nome que aparece na agenda do celular da Z-API
     
     Returns:
         str: Resposta a ser enviada ao cliente
         None: Se robô está mutado (atendimento humano ativo)
     
     Fontes de Identificação (por prioridade):
-        1. sender_name (do WhatsApp via Z-API) - PRIORIDADE MÁXIMA
-        2. state["name"] (fornecido durante agendamento atual)
-        3. state["last_booking"]["name"] (histórico da sessão)
+        1. state["name"] (fornecido durante agendamento atual) - PRIORIDADE MÁXIMA
+        2. state["last_booking"]["name"] (histórico da sessão)
+        3. sender_name (do WhatsApp/agenda do celular) - backup
         4. "Cliente não identificado" (fallback)
+    
+    IMPORTANTE: Priorizamos o nome do agendamento porque é o nome que
+    a própria cliente forneceu, enquanto sender_name vem da agenda do
+    celular da Z-API e pode estar desatualizado ou ser de outra pessoa.
     """
     # 🔇 VERIFICA SE ROBÔ ESTÁ SILENCIADO (MUTE_ROBO = TRUE)
     from backend.integrations.sheets import is_robot_muted
@@ -282,16 +286,20 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
         # 🆕 ALTERAÇÃO 2: RECUPERAÇÃO INTELIGENTE DE IDENTIDADE
         # ====================================================================
         # Tenta recuperar o nome da cliente de múltiplas fontes:
-        # 1. sender_name do WhatsApp (NOVA PRIORIDADE MÁXIMA)
-        # 2. Estado atual (se ela já forneceu durante este agendamento)
-        # 3. Último agendamento (histórico da sessão)
+        # 1. Estado atual (nome fornecido durante agendamento) - PRIORIDADE MÁXIMA
+        # 2. Último agendamento (histórico da sessão)
+        # 3. sender_name do WhatsApp (nome da agenda do celular)
         # 4. Fallback para "Cliente não identificado"
+        # 
+        # IMPORTANTE: Priorizamos o nome do agendamento porque:
+        # - É o nome que a PRÓPRIA cliente forneceu
+        # - sender_name vem da agenda do celular da Z-API, pode estar desatualizado
         # ====================================================================
         
         client_name = (
-            sender_name or                                      # 🆕 FONTE #1: WhatsApp (PRIORIDADE)
-            state.get("name") or                                # FONTE #2: Estado atual
-            state.get("last_booking", {}).get("name") or        # FONTE #3: Histórico
+            state.get("name") or                                # FONTE #1: Estado atual (PRIORIDADE)
+            state.get("last_booking", {}).get("name") or        # FONTE #2: Histórico
+            sender_name or                                      # FONTE #3: WhatsApp (backup)
             "Cliente não identificado"                          # FONTE #4: Fallback
         )
         
@@ -316,7 +324,7 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
         conversation_state.pop(phone, None)
         
         print(f"👤 [HANDOFF] Cliente '{client_name}' ({phone}) solicitou atendimento humano")
-        print(f"📊 [FONTE] Nome obtido de: {'WhatsApp' if sender_name else 'Estado/Histórico' if client_name != 'Cliente não identificado' else 'Fallback'}")
+        print(f"📊 [FONTE] Nome obtido de: {'Agendamento' if state.get('name') else 'Histórico' if state.get('last_booking', {}).get('name') else 'WhatsApp' if sender_name else 'Fallback'}")
         
         return (
             "Entendi 😊\n"
