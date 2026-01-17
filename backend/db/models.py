@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from datetime import datetime
 
 from backend.db.session import Base
@@ -64,4 +64,45 @@ class MessageLog(Base):
             f"<MessageLog(phone={self.phone}, "
             f"direction={self.direction}, "
             f"timestamp={self.timestamp})>"
+        )
+
+# --------------------------------------------------
+# SESSÕES DE CONVERSA (CONTEXTO)
+# --------------------------------------------------
+
+class ConversationSession(Base):
+    __tablename__ = "conversation_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Identificação do cliente
+    phone = Column(String(20), nullable=False, unique=True, index=True)
+    
+    # Estado atual da conversa
+    # Valores possíveis: "awaiting_name", "awaiting_service", "awaiting_date", 
+    # "awaiting_time", "awaiting_confirmation", "completed", etc.
+    current_step = Column(String(50), nullable=True)
+    
+    # Dados coletados durante a conversa (armazenado como JSON string)
+    # Exemplo: '{"name": "Maria", "services": ["Manicure", "Pé Comum"], "date": "2025-01-20"}'
+    conversation_data = Column(Text, nullable=True)
+    
+    # Controle de atendimento
+    is_muted = Column(Boolean, default=False)  # True quando está em atendimento humano
+    
+    # Status da conversa
+    # Valores: "active" (em andamento), "completed" (finalizada), 
+    # "interrupted" (interrompida), "waiting_human" (aguardando atendimento humano)
+    status = Column(String(30), default="active")
+    
+    # Timestamps
+    last_interaction = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+    def __repr__(self):
+        return (
+            f"<ConversationSession(phone={self.phone}, "
+            f"step={self.current_step}, "
+            f"status={self.status}, "
+            f"muted={self.is_muted})>"
         )
