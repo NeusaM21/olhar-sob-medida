@@ -268,19 +268,36 @@ async def receive_webhook(
         db.commit()
 
         # ====================================================================
-        # 🆕 CHAMADA DO ENGINE COM CONTEXTO COMPLETO
+        # 🆕 CHAMADA DO ENGINE COM CONTEXTO COMPLETO E PROCESSAMENTO DO RETORNO
         # ====================================================================
         print(f"🤖 Chamando engine para {phone} ({sender_name or 'sem nome'})...")
         print(f"📋 Contexto: step={session.current_step}, data={session_data}")
         
-        ai_response = generate_ai_response(
-            phone=phone,
-            message=message,
-            sender_name=sender_name,
-            current_step=session.current_step,  # 🆕 Etapa atual
-            session_data=session_data  # 🆕 Dados da conversa
-        )
+        try:
+            # 🆕 Engine agora retorna TUPLA: (mensagem, novo_estado)
+            ai_response, new_state = generate_ai_response(
+                phone=phone,
+                message=message,
+                sender_name=sender_name,
+                current_step=session.current_step,
+                session_data=session_data
+            )
+            
+            print(f"✅ Engine processado com sucesso")
+            print(f"📤 Resposta: {ai_response[:100] if ai_response else 'None'}...")
+            print(f"🔄 Novo estado: step={new_state.get('current_step')}, status={new_state.get('status')}")
+            
+        except ValueError as e:
+            # Tratamento de erro caso engine retorne formato incorreto
+            print(f"❌ Erro ao desempacotar resposta do engine: {e}")
+            return {"status": "error", "detail": "Engine retornou formato inválido"}
+        except Exception as e:
+            print(f"❌ Erro ao processar engine: {e}")
+            return {"status": "error", "detail": str(e)}
 
+        # ====================================================================
+        # 🆕 ENVIA RESPOSTA AO CLIENTE (SE HOUVER)
+        # ====================================================================
         if ai_response:
             send_whatsapp_message(phone, ai_response)
 
@@ -293,18 +310,34 @@ async def receive_webhook(
                 )
             )
             db.commit()
-            
-            # ====================================================================
-            # 🆕 ATUALIZAÇÃO DA SESSÃO APÓS RESPOSTA
-            # ====================================================================
-            # Nota: O engine deve retornar também o novo estado da conversa
-            # Por enquanto, apenas atualizamos o timestamp de last_interaction
-            # que é feito automaticamente no update_session
-            
-            print("✅ Resposta enviada e sessão atualizada")
-
+            print(f"📨 Mensagem enviada para {phone}")
+        else:
+            print(f"⚠️ Engine não retornou mensagem (possível handoff para humano)")
+        
+        # ====================================================================
+        # 🆕 ATUALIZA SESSÃO NO BANCO COM NOVO ESTADO
+        # ====================================================================
+        if new_state:
+            try:
+                update_session(
+                    db=db,
+                    session=session,
+                    current_step=new_state.get("current_step"),
+                    conversation_data=new_state.get("conversation_data"),
+                    status=new_state.get("status", "active")
+                )
+                print(f"💾 Sessão persistida no banco: step={new_state.get('current_step')}")
+            except Exception as e:
+                print(f"⚠️ Erro ao atualizar sessão: {e}")
+                # Não retorna erro para não bloquear o fluxo
+        else:
+            print(f"⚠️ Engine não retornou novo estado")
+        
+        print("✅ Webhook processado com sucesso")
         return {"status": "ok"}
 
     except Exception as e:
         print("❌ Erro no webhook:", str(e))
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "detail": str(e)}
