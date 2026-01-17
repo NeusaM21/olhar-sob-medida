@@ -29,6 +29,12 @@ COL_SERVICO = 4
 COL_TELEFONE = 5
 COL_STATUS = 6
 
+# Colunas da aba Controle_Robo (mapeamento exato da planilha)
+COL_ID_CLIENTE = 1        # Coluna A: ID_Cliente (telefone)
+COL_MUTE_ROBO = 2         # Coluna B: MUTE_ROBO (TRUE/FALSE dropdown)
+COL_NOME_CLIENTE = 3      # Coluna C: Nome_Cliente
+COL_STATUS_HUMANO = 4     # Coluna D: Status_Humano
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -216,19 +222,26 @@ def is_robot_muted(phone: str) -> bool:
     """
     Verifica se o robô está silenciado para um telefone.
     
+    Lê a coluna A (ID_Cliente) e coluna B (MUTE_ROBO) da aba Controle_Robo.
+    
     Args:
-        phone: telefone do cliente
+        phone: telefone do cliente (ID_Cliente)
         
     Returns:
         True se MUTE_ROBO = TRUE, False caso contrário
     """
     try:
         sheet = _open_sheet(WORKSHEET_CONTROLE_NAME)
-        rows = sheet.get_all_values()[1:]
+        rows = sheet.get_all_values()[1:]  # Pula cabeçalho
 
         for row in rows:
-            if len(row) >= 2 and row[0].strip() == phone:
-                return row[1].strip().upper() == "TRUE"
+            # Verifica se tem pelo menos 2 colunas (ID_Cliente e MUTE_ROBO)
+            if len(row) >= COL_MUTE_ROBO:
+                id_cliente = row[COL_ID_CLIENTE - 1].strip()  # -1 porque lista é 0-indexed
+                mute_robo = row[COL_MUTE_ROBO - 1].strip()
+                
+                if id_cliente == phone:
+                    return mute_robo.upper() == "TRUE"
 
         return False
         
@@ -237,40 +250,69 @@ def is_robot_muted(phone: str) -> bool:
         # Em caso de erro, assume que NÃO está mutado (robô funciona)
         return False
 
-def set_robot_mute(phone: str, mute: bool) -> bool:
+def set_robot_mute(phone: str, mute_status: bool, name: str = None, status: str = None) -> bool:
     """
+    🆕 VERSÃO ATUALIZADA: Atendimento Inteligente com Contexto Enriquecido
+    
     Ativa ou desativa o MUTE do robô para um telefone específico.
     Quando MUTE = True, robô para de responder (atendimento humano).
     Quando MUTE = False, robô volta a funcionar.
     
+    NOVO: Agora registra também o nome da cliente e o status da solicitação
+    para que a proprietária tenha contexto completo do handoff.
+    
     Args:
-        phone: telefone do cliente
-        mute: True para silenciar robô, False para reativar
+        phone: telefone do cliente (ID_Cliente) - obrigatório
+        mute_status: True para silenciar robô, False para reativar - obrigatório
+        name: nome da cliente (Nome_Cliente) - opcional, padrão: "Cliente não identificado"
+        status: descrição da solicitação (Status_Humano) - opcional, padrão: "Atendimento solicitado"
         
     Returns:
         True se atualizou com sucesso, False se deu erro
+        
+    Estrutura da Planilha Controle_Robo (conforme screenshot):
+        Coluna A (ciano):    ID_Cliente      - Telefone do cliente
+        Coluna B (vermelho): MUTE_ROBO       - TRUE/FALSE (dropdown)
+        Coluna C (branco):   Nome_Cliente    - Nome completo
+        Coluna D (amarelo):  Status_Humano   - Motivo/status do atendimento
     """
     try:
         sheet = _open_sheet(WORKSHEET_CONTROLE_NAME)
         rows = sheet.get_all_values()
         
-        # Procura se o telefone já existe na planilha
+        # ====================================================================
+        # 🆕 Define valores conforme nomenclatura da planilha
+        # ====================================================================
+        nome_cliente = name if name else "Cliente não identificado"
+        status_humano = status if status else "Atendimento solicitado"
+        
+        # ⚠️ IMPORTANTE: Dropdown da planilha aceita apenas "TRUE" ou "FALSE" (maiúsculas)
+        mute_robo = "TRUE" if mute_status else "FALSE"
+        
+        # Procura se o ID_Cliente já existe na planilha
         row_index = None
         for idx, row in enumerate(rows):
-            if len(row) >= 1 and row[0].strip() == phone:
-                row_index = idx + 1
-                break
-        
-        mute_value = "TRUE" if mute else "FALSE"
+            if len(row) >= COL_ID_CLIENTE:
+                id_cliente = row[COL_ID_CLIENTE - 1].strip()
+                if id_cliente == phone:
+                    row_index = idx + 1  # +1 porque gspread é 1-indexed
+                    break
         
         if row_index:
-            # Atualiza linha existente (coluna B = MUTE_ROBO)
-            sheet.update(f"B{row_index}", [[mute_value]])
-            print(f"✅ [MUTE UPDATE] {phone} -> {mute_value}")
+            # ====================================================================
+            # 🔄 ATUALIZAÇÃO: Cliente já existe - atualiza 3 colunas (B, C, D)
+            # ====================================================================
+            sheet.update(
+                f"B{row_index}:D{row_index}",  # Range: MUTE_ROBO até Status_Humano
+                [[mute_robo, nome_cliente, status_humano]]
+            )
+            print(f"✅ [MUTE UPDATE] ID: {phone} | MUTE_ROBO: {mute_robo} | Nome_Cliente: {nome_cliente} | Status_Humano: {status_humano}")
         else:
-            # Adiciona nova linha
-            sheet.append_row([phone, mute_value])
-            print(f"✅ [MUTE NEW] {phone} -> {mute_value}")
+            # ====================================================================
+            # 🆕 NOVO REGISTRO: Adiciona nova linha com 4 campos (A, B, C, D)
+            # ====================================================================
+            sheet.append_row([phone, mute_robo, nome_cliente, status_humano])
+            print(f"✅ [MUTE NEW] ID: {phone} | MUTE_ROBO: {mute_robo} | Nome_Cliente: {nome_cliente} | Status_Humano: {status_humano}")
         
         return True
         
