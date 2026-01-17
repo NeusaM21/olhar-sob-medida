@@ -231,6 +231,79 @@ def generate_ai_response(phone: str, message: str) -> str:
         "name": None
     })
     
+    # ========================================================================
+    # 🆕 ALTERAÇÃO 1: DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
+    # ========================================================================
+    # Verifica PRIMEIRO se há tag #SOLICITAR_HUMANO# ou palavras-chave
+    # Isso evita que o fluxo de agendamento atropele a intenção do usuário
+    # ========================================================================
+    
+    human_request_keywords = [
+        "#solicitar_humano#",
+        "responsavel", 
+        "responsável", 
+        "dono", 
+        "dona", 
+        "atendente", 
+        "humano", 
+        "pessoa", 
+        "alguem", 
+        "alguém", 
+        "proprietario", 
+        "proprietária", 
+        "gerente"
+    ]
+    
+    # Detecção prioritária de solicitação de atendimento humano
+    if any(palavra in text for palavra in human_request_keywords):
+        # ====================================================================
+        # 🆕 ALTERAÇÃO 2: RECUPERAÇÃO INTELIGENTE DE IDENTIDADE
+        # ====================================================================
+        # Tenta recuperar o nome da cliente de múltiplas fontes:
+        # 1. Estado atual (se ela já forneceu durante este agendamento)
+        # 2. Último agendamento (histórico da sessão)
+        # 3. Fallback para "Cliente não identificado"
+        # ====================================================================
+        
+        client_name = (
+            state.get("name") or 
+            state.get("last_booking", {}).get("name") or 
+            "Cliente não identificado"
+        )
+        
+        # ====================================================================
+        # 🆕 ALTERAÇÃO 3: ENRIQUECIMENTO DOS DADOS DA PLANILHA
+        # ====================================================================
+        # Agora enviamos 4 parâmetros em vez de 2:
+        # - phone: identificador único
+        # - True: status do mute (ativa silêncio do robô)
+        # - client_name: nome recuperado inteligentemente
+        # - status: descrição clara da ação
+        # ====================================================================
+        
+        set_robot_mute(
+            phone=phone,
+            mute_status=True,
+            name=client_name,
+            status="Solicitou falar com a dona"
+        )
+        
+        # Limpa estado para evitar confusão quando robô voltar
+        conversation_state.pop(phone, None)
+        
+        print(f"👤 [HANDOFF] Cliente '{client_name}' ({phone}) solicitou atendimento humano")
+        
+        return (
+            "Entendi 😊\n"
+            "Vou te direcionar para atendimento humano agora.\n"
+            "⏳ Por favor, aguarde um momento que você será atendida.\n"
+            "Obrigada pela paciência 💖"
+        )
+    
+    # ========================================================================
+    # FIM DAS ALTERAÇÕES - Código original continua abaixo
+    # ========================================================================
+    
     # 👋 DETECTA SAUDAÇÃO INICIAL (reseta conversa e se apresenta)
     # Palavras-chave de saudação que indicam início de nova conversa
     saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "ola!", "hey", "ei", "opa"]
@@ -256,21 +329,6 @@ def generate_ai_response(phone: str, message: str) -> str:
                 "Posso te ajudar com informações ou agendamentos.\n\n"
                 "👉 Você gostaria de conhecer nossos serviços?"
             )
-    
-    # 👤 DETECTA PEDIDO PARA FALAR COM HUMANO (em qualquer estado)
-    if any(palavra in text for palavra in ["responsavel", "responsável", "dono", "dona", "atendente", "humano", "pessoa", "alguem", "alguém", "proprietario", "proprietária", "gerente"]):
-        # Ativa MUTE_ROBO (True) para silenciar o robô
-        set_robot_mute(phone, True)
-        
-        # Limpa estado para evitar confusão quando robô voltar
-        conversation_state.pop(phone, None)
-        
-        return (
-            "Entendi 😊\n"
-            "Vou te direcionar para atendimento humano agora.\n"
-            "⏳ Por favor, aguarde um momento que você será atendida.\n"
-            "Obrigada pela paciência 💖"
-        )
     
     # 🔧 CORREÇÃO BUG #2: Detectar despedida após agendamento confirmado
     # MAS não limpar estado até cliente REALMENTE sair
