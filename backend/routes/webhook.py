@@ -51,6 +51,38 @@ def extract_message_text(data: dict) -> str:
     return ""
 
 # --------------------------------------------------
+# 🆕 EXTRAÇÃO DO NOME DO REMETENTE (Z-API)
+# --------------------------------------------------
+
+def extract_sender_name(data: dict) -> str:
+    """
+    Extrai o nome do remetente do WhatsApp cobrindo os formatos
+    mais comuns enviados pela Z-API.
+    
+    Prioridade de extração:
+    1. senderName (campo mais comum)
+    2. pushName (alternativa)
+    3. notifyName (backup)
+    4. contact.name (objeto aninhado)
+    
+    Retorna None se nenhum nome for encontrado.
+    """
+    # Tenta extrair de múltiplos campos possíveis
+    name = (
+        data.get('senderName') or 
+        data.get('pushName') or 
+        data.get('notifyName') or
+        (data.get('contact', {}).get('name') if isinstance(data.get('contact'), dict) else None)
+    )
+    
+    # Remove espaços em branco e retorna None se vazio
+    if name:
+        name = name.strip()
+        return name if name else None
+    
+    return None
+
+# --------------------------------------------------
 # WEBHOOK PRINCIPAL (Z-API)
 # --------------------------------------------------
 
@@ -86,9 +118,15 @@ async def receive_webhook(
             print("🚫 Mensagem vazia após extração")
             return {"status": "empty"}
 
+        # ====================================================================
+        # 🆕 EXTRAI NOME DO REMETENTE (NOVO)
+        # ====================================================================
+        sender_name = extract_sender_name(data)
+        print(f"👤 Nome do remetente: {sender_name or 'Não identificado'}")
+
         # Verifica mute do robô
         if is_robot_muted(phone):
-            print("🔇 Robô mutado para:", phone)
+            print(f"🔇 Robô mutado para: {phone} ({sender_name or 'sem nome'})")
             return {"status": "muted"}
 
         # Log de entrada
@@ -101,9 +139,15 @@ async def receive_webhook(
         )
         db.commit()
 
-        # 🤖 Chamada correta do engine
-        print("🤖 Chamando engine...")
-        ai_response = generate_ai_response(phone, message)
+        # ====================================================================
+        # 🆕 CHAMADA DO ENGINE COM SENDER_NAME (MODIFICADO)
+        # ====================================================================
+        print(f"🤖 Chamando engine para {phone} ({sender_name or 'sem nome'})...")
+        ai_response = generate_ai_response(
+            phone=phone,
+            message=message,
+            sender_name=sender_name  # 🆕 NOVO PARÂMETRO
+        )
 
         if ai_response:
             send_whatsapp_message(phone, ai_response)
