@@ -285,23 +285,36 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
         # ====================================================================
         # 🆕 ALTERAÇÃO 2: RECUPERAÇÃO INTELIGENTE DE IDENTIDADE
         # ====================================================================
-        # Tenta recuperar o nome da cliente de múltiplas fontes:
-        # 1. Estado atual (nome fornecido durante agendamento) - PRIORIDADE MÁXIMA
-        # 2. Último agendamento (histórico da sessão)
-        # 3. sender_name do WhatsApp (nome da agenda do celular)
-        # 4. Fallback para "Cliente não identificado"
+        # Lógica contextual de recuperação de nome:
         # 
-        # IMPORTANTE: Priorizamos o nome do agendamento porque:
-        # - É o nome que a PRÓPRIA cliente forneceu
-        # - sender_name vem da agenda do celular da Z-API, pode estar desatualizado
+        # CENÁRIO 1: Cliente em processo de agendamento mas ainda não forneceu nome
+        #   → Usa "Cliente não identificado" (não usa histórico nem sender_name)
+        #   → Evita pegar nome de outro agendamento ou da agenda do celular
+        # 
+        # CENÁRIO 2: Cliente já forneceu nome ou completou agendamento
+        #   → Prioriza nome do agendamento atual
+        #   → Depois usa histórico ou sender_name como backup
         # ====================================================================
         
-        client_name = (
-            state.get("name") or                                # FONTE #1: Estado atual (PRIORIDADE)
-            state.get("last_booking", {}).get("name") or        # FONTE #2: Histórico
-            sender_name or                                      # FONTE #3: WhatsApp (backup)
-            "Cliente não identificado"                          # FONTE #4: Fallback
-        )
+        # Verifica se está em fluxo de agendamento ativo (escolheu serviço)
+        is_in_booking_flow = state.get("service") is not None
+        
+        # Verifica se já forneceu nome neste agendamento
+        has_provided_name = state.get("name") is not None
+        
+        if is_in_booking_flow and not has_provided_name:
+            # Cliente está agendando MAS não disse nome ainda
+            # Usa apenas fallback para não pegar nome errado
+            client_name = "Cliente não identificado"
+            print(f"📊 [CONTEXTO] Cliente em agendamento sem identificação - usando fallback")
+        else:
+            # Usa lógica normal de recuperação com prioridades
+            client_name = (
+                state.get("name") or                                # FONTE #1: Nome do agendamento atual
+                state.get("last_booking", {}).get("name") or        # FONTE #2: Último agendamento
+                sender_name or                                      # FONTE #3: WhatsApp (agenda celular)
+                "Cliente não identificado"                          # FONTE #4: Fallback
+            )
         
         # ====================================================================
         # 🆕 ALTERAÇÃO 3: ENRIQUECIMENTO DOS DADOS DA PLANILHA
