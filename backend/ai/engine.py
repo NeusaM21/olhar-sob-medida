@@ -13,11 +13,6 @@ from backend.integrations.sheets import (
 )
 
 # --------------------------------------------------
-# MEMÓRIA DE CONVERSA (RAM)
-# --------------------------------------------------
-conversation_state = {}
-
-# --------------------------------------------------
 # CONFIGURAÇÕES
 # --------------------------------------------------
 def get_brazil_time():
@@ -208,60 +203,126 @@ def standardize_sheet_dates(date_list):
     return cleaned_list
 
 # --------------------------------------------------
+# 🆕 FUNÇÕES DE MANIPULAÇÃO DE ESTADO DA SESSÃO
+# --------------------------------------------------
+
+def get_state_from_session(current_step: str, session_data: dict) -> dict:
+    """
+    Converte dados da sessão do banco em formato de estado interno.
+    
+    Args:
+        current_step: Etapa atual da conversa
+        session_data: Dados da conversa em formato dict
+    
+    Returns:
+        dict: Estado no formato usado internamente pelo engine
+    """
+    # Converte date string de volta para objeto date se existir
+    date_obj = None
+    if session_data.get("date"):
+        try:
+            date_obj = datetime.strptime(session_data["date"], "%Y-%m-%d").date()
+        except:
+            pass
+    
+    return {
+        "status": current_step or "start",
+        "service": session_data.get("service"),
+        "date": date_obj,
+        "time": session_data.get("time"),
+        "name": session_data.get("name"),
+        "last_booking": session_data.get("last_booking"),
+        "engagement_context": session_data.get("engagement_context")
+    }
+
+def prepare_session_update(state: dict) -> dict:
+    """
+    Prepara os dados do estado para serem salvos na sessão do banco.
+    
+    Args:
+        state: Estado interno do engine
+    
+    Returns:
+        dict: Dados formatados para salvar no banco
+    """
+    # Converte date object para string se existir
+    date_str = None
+    if state.get("date"):
+        try:
+            date_str = state["date"].strftime("%Y-%m-%d")
+        except:
+            pass
+    
+    session_data = {
+        "service": state.get("service"),
+        "date": date_str,
+        "time": state.get("time"),
+        "name": state.get("name"),
+        "last_booking": state.get("last_booking"),
+        "engagement_context": state.get("engagement_context")
+    }
+    
+    # Remove campos None para não poluir o JSON
+    session_data = {k: v for k, v in session_data.items() if v is not None}
+    
+    return {
+        "current_step": state.get("status", "start"),
+        "conversation_data": session_data,
+        "status": "completed" if state.get("status") == "completed" else "active"
+    }
+
+# --------------------------------------------------
 # ENGINE PRINCIPAL
 # --------------------------------------------------
-def generate_ai_response(phone: str, message: str, sender_name: str = None) -> str:
+def generate_ai_response(
+    phone: str,
+    message: str,
+    sender_name: str = None,
+    current_step: str = None,
+    session_data: dict = None
+) -> tuple[str, dict]:
     """
-    🆕 VERSÃO ATUALIZADA: Motor de IA com Identificação Enriquecida
+    🆕 VERSÃO INTEGRADA COM BANCO DE DADOS
     
     Gera resposta automatizada para mensagens do WhatsApp, gerenciando
-    todo o fluxo de agendamento e handoff para atendimento humano.
+    todo o fluxo de agendamento com PERSISTÊNCIA em banco de dados.
     
     Args:
         phone: Telefone do cliente no formato completo (ex: 5511999666070)
         message: Texto da mensagem enviada pelo cliente
         sender_name: Nome do remetente capturado do WhatsApp (opcional)
-                    Nome que aparece na agenda do celular da Z-API
+        current_step: Etapa atual da conversa vinda do banco
+        session_data: Dados da conversa vindos do banco
     
     Returns:
-        str: Resposta a ser enviada ao cliente
-        None: Se robô está mutado (atendimento humano ativo)
+        tuple: (mensagem_resposta, dados_para_atualizar_sessao)
+            - mensagem_resposta (str): Texto a ser enviado ao cliente
+            - dados_para_atualizar_sessao (dict): {
+                "current_step": str,
+                "conversation_data": dict,
+                "status": str
+              }
     
     Fontes de Identificação (por prioridade):
-        1. state["name"] (fornecido durante agendamento atual) - PRIORIDADE MÁXIMA
-        2. state["last_booking"]["name"] (histórico da sessão)
-        3. sender_name (do WhatsApp/agenda do celular) - backup
+        1. session_data["name"] (fornecido durante agendamento atual)
+        2. session_data["last_booking"]["name"] (histórico)
+        3. sender_name (do WhatsApp/agenda do celular)
         4. "Cliente não identificado" (fallback)
-    
-    IMPORTANTE: Priorizamos o nome do agendamento porque é o nome que
-    a própria cliente forneceu, enquanto sender_name vem da agenda do
-    celular da Z-API e pode estar desatualizado ou ser de outra pessoa.
     """
-    # 🔇 VERIFICA SE ROBÔ ESTÁ SILENCIADO (MUTE_ROBO = TRUE)
-    from backend.integrations.sheets import is_robot_muted
-    
-    if is_robot_muted(phone):
-        # Robô silenciado - humano está atendendo
-        # Não processa nem responde a mensagem
-        print(f"🔇 [MUTE] Robô silenciado para {phone} - humano no controle")
-        return None
     
     text = normalize(message)
     
-    # Recupera estado ou cria novo (DEVE vir ANTES de qualquer uso de 'state')
-    state = conversation_state.get(phone, {
-        "status": "start", 
-        "service": None,
-        "date": None,
-        "time": None,
-        "name": None
-    })
+    # 🆕 Inicializa session_data se vier None
+    if session_data is None:
+        session_data = {}
+    
+    # 🆕 Converte dados da sessão para formato interno
+    state = get_state_from_session(current_step, session_data)
+    
+    print(f"🔍 [ENGINE] Processando: phone={phone}, step={state['status']}, data={session_data}")
     
     # ========================================================================
-    # 🆕 ALTERAÇÃO 1: DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
-    # ========================================================================
-    # Verifica PRIMEIRO se há tag #SOLICITAR_HUMANO# ou palavras-chave
-    # Isso evita que o fluxo de agendamento atropele a intenção do usuário
+    # 🆕 DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
     # ========================================================================
     
     human_request_keywords = [
@@ -282,50 +343,22 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
     
     # Detecção prioritária de solicitação de atendimento humano
     if any(palavra in text for palavra in human_request_keywords):
-        # ====================================================================
-        # 🆕 ALTERAÇÃO 2: RECUPERAÇÃO INTELIGENTE DE IDENTIDADE
-        # ====================================================================
-        # Lógica contextual de recuperação de nome:
-        # 
-        # CENÁRIO 1: Cliente em processo de agendamento mas ainda não forneceu nome
-        #   → Usa "Cliente não identificado" (não usa histórico nem sender_name)
-        #   → Evita pegar nome de outro agendamento ou da agenda do celular
-        # 
-        # CENÁRIO 2: Cliente já forneceu nome ou completou agendamento
-        #   → Prioriza nome do agendamento atual
-        #   → Depois usa histórico ou sender_name como backup
-        # ====================================================================
-        
-        # Verifica se está em fluxo de agendamento ativo (escolheu serviço)
+        # Recuperação inteligente de identidade
         is_in_booking_flow = state.get("service") is not None
-        
-        # Verifica se já forneceu nome neste agendamento
         has_provided_name = state.get("name") is not None
         
         if is_in_booking_flow and not has_provided_name:
-            # Cliente está agendando MAS não disse nome ainda
-            # Usa apenas fallback para não pegar nome errado
             client_name = "Cliente não identificado"
             print(f"📊 [CONTEXTO] Cliente em agendamento sem identificação - usando fallback")
         else:
-            # Usa lógica normal de recuperação com prioridades
             client_name = (
-                state.get("name") or                                # FONTE #1: Nome do agendamento atual
-                state.get("last_booking", {}).get("name") or        # FONTE #2: Último agendamento
-                sender_name or                                      # FONTE #3: WhatsApp (agenda celular)
-                "Cliente não identificado"                          # FONTE #4: Fallback
+                state.get("name") or
+                state.get("last_booking", {}).get("name") or
+                sender_name or
+                "Cliente não identificado"
             )
         
-        # ====================================================================
-        # 🆕 ALTERAÇÃO 3: ENRIQUECIMENTO DOS DADOS DA PLANILHA
-        # ====================================================================
-        # Agora enviamos 4 parâmetros em vez de 2:
-        # - phone: identificador único
-        # - True: status do mute (ativa silêncio do robô)
-        # - client_name: nome recuperado inteligentemente
-        # - status: descrição clara da ação
-        # ====================================================================
-        
+        # Registra na planilha
         set_robot_mute(
             phone=phone,
             mute_status=True,
@@ -333,124 +366,114 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             status="Solicitou falar com a dona"
         )
         
-        # Limpa estado para evitar confusão quando robô voltar
-        conversation_state.pop(phone, None)
-        
         print(f"👤 [HANDOFF] Cliente '{client_name}' ({phone}) solicitou atendimento humano")
-        print(f"📊 [FONTE] Nome obtido de: {'Agendamento' if state.get('name') else 'Histórico' if state.get('last_booking', {}).get('name') else 'WhatsApp' if sender_name else 'Fallback'}")
         
+        # 🆕 Retorna estado atualizado para indicar que está em atendimento humano
         return (
             "Entendi 😊\n"
             "Vou te direcionar para atendimento humano agora.\n"
             "⏳ Por favor, aguarde um momento que você será atendida.\n"
-            "Obrigada pela paciência 💖"
+            "Obrigada pela paciência 💖",
+            {
+                "current_step": state["status"],  # Mantém step atual
+                "conversation_data": session_data,
+                "status": "waiting_human"  # Marca como aguardando humano
+            }
         )
     
     # ========================================================================
-    # FIM DAS ALTERAÇÕES - Código original continua abaixo
+    # DETECÇÃO DE SAUDAÇÃO INICIAL
     # ========================================================================
     
-    # 👋 DETECTA SAUDAÇÃO INICIAL (reseta conversa e se apresenta)
-    # Palavras-chave de saudação que indicam início de nova conversa
     saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "ola!", "hey", "ei", "opa"]
     
-    # Se cliente enviou saudação e NÃO está em meio a um fluxo crítico
     if any(saudacao in text for saudacao in saudacoes):
-        # Verifica se está em fluxo crítico (agendamento em andamento)
         estados_criticos = ["awaiting_name", "awaiting_confirmation", "awaiting_time"]
         
         if state.get("status") not in estados_criticos:
-            # Reseta estado e inicia apresentação
-            conversation_state[phone] = {
-                "status": "awaiting_welcome_response",
-                "service": None,
-                "date": None,
-                "time": None,
-                "name": None
-            }
+            state["status"] = "awaiting_welcome_response"
+            state["service"] = None
+            state["date"] = None
+            state["time"] = None
+            state["name"] = None
             
             return (
                 "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
                 "Sou a assistente virtual do estúdio 😊\n"
                 "Posso te ajudar com informações ou agendamentos.\n\n"
-                "👉 Você gostaria de conhecer nossos serviços?"
+                "👉 Você gostaria de conhecer nossos serviços?",
+                prepare_session_update(state)
             )
     
-    # 🔧 CORREÇÃO BUG #2: Detectar despedida após agendamento confirmado
-    # MAS não limpar estado até cliente REALMENTE sair
+    # ========================================================================
+    # CORREÇÃO: Detectar despedida após agendamento confirmado
+    # ========================================================================
+    
     if state.get("status") == "completed":
-        # Detectar respostas negativas educadas (cliente não quer mais nada)
         if any(x in text for x in ["nao", "não", "obrigado", "obrigada", "valeu", "vlw", "ta bom", "tá bom", "beleza", "so isso", "só isso", "ok"]):
             name = state.get("last_booking", {}).get("name", "")
             date = state.get("last_booking", {}).get("date", "")
             time = state.get("last_booking", {}).get("time", "")
             
-            # 🆕 NÃO limpa estado aqui - marca como "despedido"
             state["status"] = "farewell_sent"
-            conversation_state[phone] = state
             
             if name and date and time:
                 return (
                     f"Perfeito, *{name}*! 💖\n\n"
                     "Foi um prazer te atender!\n"
                     f"Nos vemos em *{date}* às *{time}* ✨\n\n"
-                    "Até lá! 👋"
+                    "Até lá! 👋",
+                    prepare_session_update(state)
                 )
             else:
                 return (
                     "Perfeito! 💖\n\n"
                     "Foi um prazer te atender!\n"
-                    "Até breve! 👋"
+                    "Até breve! 👋",
+                    prepare_session_update(state)
                 )
-        
-        # 🔧 CORREÇÃO: Cliente quer algo mais (pergunta sobre endereço, Instagram, etc)
-        # NÃO reseta para "start" - deixa o código continuar processando
-        # Estado PERMANECE "completed" para manter contexto do agendamento
     
-    # 🔧 CORREÇÃO BUG #2: Se cliente já recebeu despedida e volta a falar
-    # Reconhecer que já tem agendamento e NÃO se reapresentar
     if state.get("status") == "farewell_sent":
-        # Cliente voltou a falar - verificar se tem agendamento ativo
         if state.get("last_booking"):
-            # Tem agendamento - não se reapresentar, apenas continuar atendendo
             state["status"] = "completed"
-            conversation_state[phone] = state
-            # Deixa o código continuar para processar a mensagem
         else:
-            # Não tem agendamento - pode voltar ao início
             state["status"] = "start"
-            conversation_state[phone] = state
     
-    # 🆕 CORREÇÃO 2: Detectar pergunta sobre serviços (ANTES de tudo)
-    # Isso evita que a IA reinicie do zero quando o cliente pergunta sobre serviços
+    # ========================================================================
+    # DETECÇÃO DE PERGUNTA SOBRE SERVIÇOS
+    # ========================================================================
+    
     if any(palavra in text for palavra in ["servico", "serviços", "servicos", "lista", "quais servico", "que servico", "tem quais", "oferece"]):
-        # 🔧 CORREÇÃO BUG #1: Bloquear detecção de palavra-chave em awaiting_welcome_response
-        # Se não está em um fluxo crítico (apresentação, nome, confirmação), mostra lista
         if state.get("status") not in ["awaiting_welcome_response", "awaiting_name", "awaiting_confirmation"]:
             state["status"] = "awaiting_service_selection"
-            conversation_state[phone] = state
             
             services_list = format_services_list()
             return (
                 "Confira nossos serviços:\n\n"
                 f"{services_list}\n\n"
                 "👉 Digite o número ou nome do serviço que deseja agendar!\n\n"
-                "💡 Exemplo: *1* ou *sobrancelha*"
+                "💡 Exemplo: *1* ou *sobrancelha*",
+                prepare_session_update(state)
             )
     
-    # Se o usuário mandar "cancelar", reseta tudo
+    # ========================================================================
+    # CANCELAMENTO
+    # ========================================================================
+    
     if "cancelar" in text or "desmarcar" in text:
-        # 🔧 CORREÇÃO: Pega o estado ATUAL antes de verificar
-        current_state = conversation_state.get(phone, {})
-        
-        # 🆕 Caso 1: Cancelamento APÓS agendamento confirmado
-        if current_state.get("last_booking"):
-            last_booking = current_state["last_booking"]
-            
-            # Tenta cancelar na planilha
+        # Caso 1: Cancelamento após agendamento confirmado
+        if state.get("last_booking"):
+            last_booking = state["last_booking"]
             cancelado = cancel_appointment(phone)
             
-            conversation_state.pop(phone, None)
+            # Limpa estado
+            state = {
+                "status": "start",
+                "service": None,
+                "date": None,
+                "time": None,
+                "name": None
+            }
             
             if cancelado:
                 return (
@@ -463,23 +486,31 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                     "📅 Reagendar para outro dia ou horário?\n"
                     "✨ Agendar outro serviço?\n"
                     "📍 Ver nossos serviços disponíveis?\n\n"
-                    "É só me dizer! Estou aqui para ajudar 💖"
+                    "É só me dizer! Estou aqui para ajudar 💖",
+                    prepare_session_update(state)
                 )
             else:
                 return (
                     f"Entendi, *{last_booking['name']}*! 😊\n\n"
                     "⚠️ *IMPORTANTE:* Entre em contato conosco para confirmar o cancelamento!\n\n"
                     "📞 WhatsApp: (11) 9 1234-5678\n\n"
-                    "Se quiser reagendar depois, é só me chamar! 💖"
+                    "Se quiser reagendar depois, é só me chamar! 💖",
+                    prepare_session_update(state)
                 )
         
-        # 🆕 Caso 2: Cancelamento DURANTE o processo de agendamento (antes de confirmar)
-        if current_state.get("service"):
-            service_name = current_state.get("service", {}).get("name", "")
-            date_str = current_state.get("date", "")
-            time_str = current_state.get("time", "")
+        # Caso 2: Cancelamento durante o processo
+        if state.get("service"):
+            service_name = state.get("service", {}).get("name", "")
+            date_str = state.get("date", "")
+            time_str = state.get("time", "")
             
-            conversation_state.pop(phone, None)
+            state = {
+                "status": "start",
+                "service": None,
+                "date": None,
+                "time": None,
+                "name": None
+            }
             
             msg = "Tudo bem! Agendamento cancelado. 😊\n\n"
             if service_name or date_str or time_str:
@@ -497,29 +528,41 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             msg += "✨ Conhecer outros serviços?\n"
             msg += "📍 Saber mais sobre o studio?\n\n"
             msg += "É só me dizer! Estou aqui para ajudar 💖"
-            return msg
+            
+            return (msg, prepare_session_update(state))
         
-        # Caso 3: Cancelamento sem nada em andamento
-        conversation_state.pop(phone, None)
-        return "Tudo bem! Se precisar de algo, é só chamar. 👋"
+        # Caso 3: Sem nada em andamento
+        state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
+        return (
+            "Tudo bem! Se precisar de algo, é só chamar. 👋",
+            prepare_session_update(state)
+        )
     
-    # Despedida simples
+    # ========================================================================
+    # DESPEDIDA
+    # ========================================================================
+    
     if "tchau" in text or "ate logo" in text or "até logo" in text:
         name = ""
-        current_state = conversation_state.get(phone, {})
-        if current_state.get("last_booking"):
-            name = current_state["last_booking"]["name"]
+        if state.get("last_booking"):
+            name = state["last_booking"]["name"]
         
         if name:
-            return f"Até logo, *{name}*! 💖 Foi um prazer te atender! 👋"
-        return "Até logo! 💖 Foi um prazer te atender! 👋"
+            return (
+                f"Até logo, *{name}*! 💖 Foi um prazer te atender! 👋",
+                prepare_session_update(state)
+            )
+        return (
+            "Até logo! 💖 Foi um prazer te atender! 👋",
+            prepare_session_update(state)
+        )
     
-    # 🆕 CORREÇÃO 4: RESPOSTAS CONTEXTUAIS baseadas em agendamento ativo
-    # Verifica se há agendamento confirmado para personalizar respostas
+    # ========================================================================
+    # RESPOSTAS CONTEXTUAIS (ENDEREÇO, TELEFONE, INSTAGRAM)
+    # ========================================================================
     
     # ENDEREÇO
     if any(palavra in text for palavra in ["endereco", "endereço", "local", "onde", "localizacao", "localização"]):
-        # 🔧 Verifica se há agendamento confirmado
         if state.get("last_booking"):
             booking = state["last_booking"]
             return (
@@ -527,35 +570,33 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "Rua Horácio de Castilho, 21\n"
                 "Vila Maria Alta – São Paulo/SP\n\n"
                 "🕘 Funcionamos de terça a sábado, das 9h às 19h.\n\n"
-                f"✨ Nos vemos em *{booking['date']}* às *{booking['time']}*! 💖"
+                f"✨ Nos vemos em *{booking['date']}* às *{booking['time']}*! 💖",
+                prepare_session_update(state)
             )
-        # 🔧 CORREÇÃO BUG #1: Se está em awaiting_welcome_response, não muda o estado
         elif state.get("status") == "awaiting_welcome_response":
-            # Não muda estado - cliente pode ainda responder sim/não
             return (
                 "📍 *Endereço do Studio Olhar Sob Medida:*\n\n"
                 "Rua Horácio de Castilho, 21\n"
                 "Vila Maria Alta – São Paulo/SP\n\n"
                 "🕘 Funcionamos de terça a sábado, das 9h às 19h.\n\n"
-                "Se quiser, posso te mostrar nossos serviços 😊"
+                "Se quiser, posso te mostrar nossos serviços 😊",
+                prepare_session_update(state)
             )
         else:
-            # Outros estados - pode oferecer agendamento
             state["status"] = "awaiting_engagement_response"
             state["engagement_context"] = "address"
-            conversation_state[phone] = state
             
             return (
                 "📍 *Endereço do Studio Olhar Sob Medida:*\n\n"
                 "Rua Horácio de Castilho, 21\n"
                 "Vila Maria Alta – São Paulo/SP\n\n"
                 "🕘 Funcionamos de terça a sábado, das 9h às 19h.\n\n"
-                "Se quiser, posso te mostrar nossos serviços 😊"
+                "Se quiser, posso te mostrar nossos serviços 😊",
+                prepare_session_update(state)
             )
     
     # TELEFONE
     if any(palavra in text for palavra in ["telefone", "contato", "whatsapp", "ligar"]):
-        # 🔧 Verifica se há agendamento confirmado
         if state.get("last_booking"):
             booking = state["last_booking"]
             return (
@@ -563,33 +604,31 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "WhatsApp: (11) 9 1234-5678\n"
                 "Telefone fixo: (11) 1234-5678\n\n"
                 f"Qualquer dúvida, estou aqui! 😊\n"
-                f"Nos vemos em *{booking['date']}* às *{booking['time']}* ✨"
+                f"Nos vemos em *{booking['date']}* às *{booking['time']}* ✨",
+                prepare_session_update(state)
             )
-        # 🔧 CORREÇÃO BUG #1: Se está em awaiting_welcome_response, não muda o estado
         elif state.get("status") == "awaiting_welcome_response":
-            # Não muda estado - cliente pode ainda responder sim/não
             return (
                 "📞 *Nossos contatos:*\n\n"
                 "WhatsApp: (11) 9 1234-5678\n"
                 "Telefone fixo: (11) 1234-5678\n\n"
-                "Qualquer dúvida, estou aqui! 😊"
+                "Qualquer dúvida, estou aqui! 😊",
+                prepare_session_update(state)
             )
         else:
-            # Outros estados - pode oferecer agendamento
             state["status"] = "awaiting_engagement_response"
             state["engagement_context"] = "phone"
-            conversation_state[phone] = state
             
             return (
                 "📞 *Nossos contatos:*\n\n"
                 "WhatsApp: (11) 9 1234-5678\n"
                 "Telefone fixo: (11) 1234-5678\n\n"
-                "👉 Posso te ajudar com algum agendamento? 😊"
+                "👉 Posso te ajudar com algum agendamento? 😊",
+                prepare_session_update(state)
             )
     
     # INSTAGRAM
     if any(palavra in text for palavra in ["instagram", "insta", "rede social", "redes sociais", "facebook", "social", "fotos", "portfolio"]):
-        # 🔧 Verifica se há agendamento confirmado
         if state.get("last_booking"):
             booking = state["last_booking"]
             return (
@@ -601,11 +640,10 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "📸 Fotos antes e depois\n"
                 "🎁 Promoções exclusivas\n"
                 "💄 Dicas de beleza\n\n"
-                f"Confira nossos trabalhos! Te esperamos em *{booking['date']}* às *{booking['time']}* 💖"
+                f"Confira nossos trabalhos! Te esperamos em *{booking['date']}* às *{booking['time']}* 💖",
+                prepare_session_update(state)
             )
-        # 🔧 CORREÇÃO BUG #1: Se está em awaiting_welcome_response, não muda o estado
         elif state.get("status") == "awaiting_welcome_response":
-            # Não muda estado - cliente pode ainda responder sim/não
             return (
                 "📱 *Siga a gente no Instagram!*\n\n"
                 "🌟 @olharsobmedida\n"
@@ -615,13 +653,12 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "📸 Fotos antes e depois\n"
                 "🎁 Promoções exclusivas\n"
                 "💄 Dicas de beleza\n\n"
-                "Vem conferir! 😊💖"
+                "Vem conferir! 😊💖",
+                prepare_session_update(state)
             )
         else:
-            # Outros estados - pode oferecer agendamento
             state["status"] = "awaiting_engagement_response"
             state["engagement_context"] = "instagram"
-            conversation_state[phone] = state
             
             return (
                 "📱 *Siga a gente no Instagram!*\n\n"
@@ -632,15 +669,17 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "📸 Fotos antes e depois\n"
                 "🎁 Promoções exclusivas\n"
                 "💄 Dicas de beleza\n\n"
-                "👉 Viu algum serviço que te interessou? Posso agendar para você! 💖"
+                "👉 Viu algum serviço que te interessou? Posso agendar para você! 💖",
+                prepare_session_update(state)
             )
-
-    # 🆕 NOVO FLUXO: RESPOSTA AO ENGAJAMENTO (SIM/NÃO)
+    
+    # ========================================================================
+    # RESPOSTA AO ENGAJAMENTO
+    # ========================================================================
+    
     if state.get("status") == "awaiting_engagement_response":
-        # Cliente respondeu SIM
         if any(x in text for x in ["sim", "claro", "quero", "pode", "gostaria", "ok"]):
             state["status"] = "awaiting_service_selection"
-            conversation_state[phone] = state
             
             services_list = format_services_list()
             return (
@@ -648,26 +687,24 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "Confira nossos serviços:\n\n"
                 f"{services_list}\n\n"
                 "👉 Digite o número ou nome do serviço que deseja agendar!\n\n"
-                "💡 Exemplo: *1* ou *sobrancelha*"
+                "💡 Exemplo: *1* ou *sobrancelha*",
+                prepare_session_update(state)
             )
         
-        # Cliente respondeu NÃO
         elif any(x in text for x in ["nao", "não", "agora nao", "agora não", "depois"]):
-            conversation_state.pop(phone, None)
+            state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
             return (
-                "Tudo bem 😊 Quando quiser conhecer ou agendar um serviço, é só me chamar. Estarei por aqui ✨"
+                "Tudo bem 😊 Quando quiser conhecer ou agendar um serviço, é só me chamar. Estarei por aqui ✨",
+                prepare_session_update(state)
             )
         
-        # Cliente mandou outra coisa - tenta entender como serviço
         else:
             detected_service = detect_service_by_number_or_name(text)
             
             if detected_service:
                 state["service"] = detected_service
                 state["status"] = "awaiting_date"
-                conversation_state[phone] = state
                 
-                # 🆕 Mensagem contextual sobre dias de funcionamento
                 now_br = get_brazil_time()
                 is_open_today, today_name = is_working_day(now_br.date())
                 
@@ -689,27 +726,26 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                         "💡 Funcionamos de *Terça a Sábado* das *9h às 19h*"
                     )
                 
-                return date_msg
+                return (date_msg, prepare_session_update(state))
             else:
-                return "Desculpe, não entendi 😕 Você gostaria de agendar um serviço? (responda *sim* ou *não*)"
-
-    # =========================================================================
-    # DETECÇÃO RÁPIDA DE INTENÇÃO (Atalho)
-    # Se o usuário já falar o nome de um serviço, pulamos a apresentação
-    # 🔧 CORREÇÃO BUG #1: MAS não se estiver em awaiting_welcome_response
-    # =========================================================================
+                return (
+                    "Desculpe, não entendi 😕 Você gostaria de agendar um serviço? (responda *sim* ou *não*)",
+                    prepare_session_update(state)
+                )
+    
+    # ========================================================================
+    # DETECÇÃO RÁPIDA DE SERVIÇO (ATALHO)
+    # ========================================================================
+    
     detected_service = None
     
-    # 🔧 Só detecta serviço se NÃO estiver esperando resposta da apresentação
     if state.get("status") not in ["awaiting_welcome_response", "awaiting_name", "awaiting_confirmation"]:
         detected_service = detect_service_by_number_or_name(text)
             
     if detected_service:
         state["service"] = detected_service
         state["status"] = "awaiting_date"
-        conversation_state[phone] = state
         
-        # 🆕 Mensagem contextual sobre dias de funcionamento
         now_br = get_brazil_time()
         is_open_today, today_name = is_working_day(now_br.date())
         
@@ -731,64 +767,64 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 "💡 Funcionamos de *Terça a Sábado* das *9h às 19h*"
             )
         
-        return date_msg
-
-    # =========================================================================
+        return (date_msg, prepare_session_update(state))
+    
+    # ========================================================================
     # FLUXO 1: BOAS VINDAS
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "start":
         state["status"] = "awaiting_welcome_response"
-        conversation_state[phone] = state
         
         return (
             "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
             "Sou a assistente virtual do estúdio 😊\n"
             "Posso te ajudar com informações ou agendamentos.\n\n"
-            "👉 Você gostaria de conhecer nossos serviços?"
+            "👉 Você gostaria de conhecer nossos serviços?",
+            prepare_session_update(state)
         )
-
-    # =========================================================================
+    
+    # ========================================================================
     # FLUXO 2: RESPOSTA DA APRESENTAÇÃO
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "awaiting_welcome_response":
-        # 🔧 CORREÇÃO BUG #1: Validação ESTRITA de sim/não
         if any(x in text for x in ["sim", "claro", "quero", "pode", "gostaria", "lista", "sim por favor", "com certeza", "aceito"]):
             state["status"] = "awaiting_service_selection"
-            conversation_state[phone] = state
             
             services_list = format_services_list()
             return (
                 "Confira nossos serviços:\n\n"
                 f"{services_list}\n\n"
                 "👉 Digite o número ou nome do serviço que deseja agendar!\n\n"
-                "💡 Exemplo: *1* ou *sobrancelha*"
+                "💡 Exemplo: *1* ou *sobrancelha*",
+                prepare_session_update(state)
             )
         elif any(x in text for x in ["nao", "não", "agora nao", "agora não", "depois", "talvez depois"]):
-            # Cliente claramente disse NÃO
-            conversation_state.pop(phone, None)
-            return "Entendi! Se quiser agendar algo depois, é só me chamar! 😊"
+            state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
+            return (
+                "Entendi! Se quiser agendar algo depois, é só me chamar! 😊",
+                prepare_session_update(state)
+            )
         else:
-            # 🔧 CORREÇÃO BUG #1: Cliente mandou algo que não é sim/não
-            # Não avança estado - pede resposta clara
             return (
                 "Desculpe, não entendi 😊\n\n"
                 "Você gostaria de conhecer nossos serviços?\n"
-                "👉 Responda *sim* ou *não*, por favor!"
+                "👉 Responda *sim* ou *não*, por favor!",
+                prepare_session_update(state)
             )
-
-    # =========================================================================
-    # FLUXO 3: ESCOLHA DO SERVIÇO (Caso venha do menu)
-    # =========================================================================
+    
+    # ========================================================================
+    # FLUXO 3: ESCOLHA DO SERVIÇO
+    # ========================================================================
+    
     if state["status"] == "awaiting_service_selection":
-        # Tenta detectar serviço por número ou nome
         detected_service = detect_service_by_number_or_name(text)
         
         if detected_service:
             state["service"] = detected_service
             state["status"] = "awaiting_date"
-            conversation_state[phone] = state
             
-            # 🆕 Mensagem contextual sobre dias de funcionamento
             now_br = get_brazil_time()
             is_open_today, today_name = is_working_day(now_br.date())
             
@@ -810,20 +846,26 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                     "💡 Funcionamos de *Terça a Sábado* das *9h às 19h*"
                 )
             
-            return date_msg
+            return (date_msg, prepare_session_update(state))
         else:
-            return "Não entendi qual serviço você quer 😕 Tente digitar o *número* ou o *nome*, como *1* ou *Sobrancelha*."
-
-    # =========================================================================
+            return (
+                "Não entendi qual serviço você quer 😕 Tente digitar o *número* ou o *nome*, como *1* ou *Sobrancelha*.",
+                prepare_session_update(state)
+            )
+    
+    # ========================================================================
     # FLUXO 4: DATA
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "awaiting_date":
         date, time = extract_date_and_time(text)
         
         if not date:
-            return "Não consegui entender a data 😕 Pode me dizer novamente? (Ex: hoje, amanhã, 02/01)"
+            return (
+                "Não consegui entender a data 😕 Pode me dizer novamente? (Ex: hoje, amanhã, 02/01)",
+                prepare_session_update(state)
+            )
         
-        # 🆕 VALIDA SE É DIA DE FUNCIONAMENTO
         is_open, day_name = is_working_day(date)
         
         if not is_open:
@@ -832,7 +874,8 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             return (
                 f"⚠️ {day_name} ({date.strftime('%d/%m')}) o studio está fechado.\n\n"
                 "🕒 Funcionamos de *Terça a Sábado* das *9h às 19h*\n\n"
-                f"👉 Que tal agendar para *{next_day_str}* ou outra data da sua preferência?"
+                f"👉 Que tal agendar para *{next_day_str}* ou outra data da sua preferência?",
+                prepare_session_update(state)
             )
 
         raw_available_dates = get_available_dates() 
@@ -845,13 +888,12 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
         if user_date_str not in clean_available_dates:
             return (
                 f"Essa data ({date.strftime('%d/%m')}) não está disponível ou não temos agenda aberta 😕\n"
-                "👉 Pode escolher outra data, por favor?"
+                "👉 Pode escolher outra data, por favor?",
+                prepare_session_update(state)
             )
             
         state["date"] = date
-        conversation_state[phone] = state
         
-        # Se o usuário já mandou horário (ex: "hoje as 16hs")
         if time:
             try:
                 available_times = get_available_times_for_date(date.strftime("%d/%m/%Y"))
@@ -859,43 +901,49 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 print(f"❌ [ERROR] Falha ao buscar horários: {e}")
                 return (
                     f"Desculpe, tive um problema ao verificar os horários disponíveis para {date.strftime('%d/%m')} 😕\n\n"
-                    "Por favor, tente novamente ou escolha apenas a data primeiro."
+                    "Por favor, tente novamente ou escolha apenas a data primeiro.",
+                    prepare_session_update(state)
                 )
             
             if time not in available_times:
                  return (
                     f"Consegui a data {date.strftime('%d/%m')}, mas o horário *{time}* já está ocupado 😕\n"
-                    f"Horários livres: {', '.join(available_times)}"
+                    f"Horários livres: {', '.join(available_times)}",
+                    prepare_session_update(state)
                 )
 
             state["time"] = time
             state["status"] = "awaiting_name"
-            conversation_state[phone] = state
             
             return (
                 f"Perfeito! ✨\n"
                 f"📅 Data: *{date.strftime('%d/%m')}*\n"
                 f"⏰ Horário: *{time}*\n\n"
                 "👉 Para finalizar, qual é o seu *nome completo*?\n"
-                "(Nome e sobrenome, por favor)"
+                "(Nome e sobrenome, por favor)",
+                prepare_session_update(state)
             )
             
         state["status"] = "awaiting_time"
-        conversation_state[phone] = state
         
         return (
             f"Perfeito! ✨ Data escolhida: *{date.strftime('%d/%m')}*\n\n"
-            "👉 Qual horário você prefere?"
+            "👉 Qual horário você prefere?",
+            prepare_session_update(state)
         )
-
-    # =========================================================================
+    
+    # ========================================================================
     # FLUXO 5: HORÁRIO
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "awaiting_time":
         _, time = extract_date_and_time(text)
         
         if not time:
-            return "Não consegui entender o horário 😕 Pode me dizer novamente? (Ex: 16h)"
+            return (
+                "Não consegui entender o horário 😕 Pode me dizer novamente? (Ex: 16h)",
+                prepare_session_update(state)
+            )
         
         try:
             available_times = get_available_times_for_date(state["date"].strftime("%d/%m/%Y"))
@@ -903,47 +951,48 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             print(f"❌ [ERROR] Falha ao buscar horários: {e}")
             return (
                 f"Desculpe, tive um problema ao verificar os horários disponíveis 😕\n\n"
-                "Por favor, tente novamente."
+                "Por favor, tente novamente.",
+                prepare_session_update(state)
             )
         
         if time not in available_times:
              return (
                 f"Esse horário não está disponível 😕\n"
-                f"Horários disponíveis: {', '.join(available_times)}"
+                f"Horários disponíveis: {', '.join(available_times)}",
+                prepare_session_update(state)
             )
 
         state["time"] = time
         state["status"] = "awaiting_name"
-        conversation_state[phone] = state
         
         return (
             f"Perfeito! ✨\n"
             f"📅 Data: *{state['date'].strftime('%d/%m')}*\n"
             f"⏰ Horário: *{time}*\n\n"
             "👉 Para finalizar, qual é o seu *nome completo*?\n"
-            "(Nome e sobrenome, por favor)"
+            "(Nome e sobrenome, por favor)",
+            prepare_session_update(state)
         )
-
-    # =========================================================================
+    
+    # ========================================================================
     # FLUXO 6: NOME DO CLIENTE
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "awaiting_name":
-        # Captura o nome (remove palavras como "meu nome é", "sou", etc)
         name = message.strip()
         for phrase in ["meu nome e", "meu nome é", "me chamo", "sou", "eu sou"]:
             name = name.replace(phrase, "").strip()
         
-        # Valida se tem pelo menos nome e sobrenome
         name_parts = name.split()
         if len(name_parts) < 2:
             return (
                 "Por favor, me informe seu *nome completo* (nome e sobrenome) 😊\n"
-                "Exemplo: Maria Silva"
+                "Exemplo: Maria Silva",
+                prepare_session_update(state)
             )
         
         state["name"] = name.title()
         state["status"] = "awaiting_confirmation"
-        conversation_state[phone] = state
         
         return (
             f"Prazer, *{state['name']}*! 😊\n\n"
@@ -952,12 +1001,14 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             f"✨ Serviço: *{state['service']['name']}*\n"
             f"📅 Data: *{state['date'].strftime('%d/%m')}*\n"
             f"⏰ Horário: *{state['time']}*\n\n"
-            "👉 Posso confirmar o agendamento?"
+            "👉 Posso confirmar o agendamento?",
+            prepare_session_update(state)
         )
-
-    # =========================================================================
+    
+    # ========================================================================
     # FLUXO 7: CONFIRMAÇÃO
-    # =========================================================================
+    # ========================================================================
+    
     if state["status"] == "awaiting_confirmation":
         if any(x in text for x in ["sim", "confirmar", "ok", "pode"]):
             book_appointment(
@@ -968,39 +1019,43 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
                 time=state["time"]
             )
             
-            # 🆕 Salva informações do último agendamento para possível cancelamento
-            conversation_state[phone] = {
-                "status": "completed",
-                "last_booking": {
-                    "name": state["name"],
-                    "service": state["service"]["name"],
-                    "date": state["date"].strftime("%d/%m"),
-                    "time": state["time"]
-                }
+            # Salva informações do último agendamento
+            state["status"] = "completed"
+            state["last_booking"] = {
+                "name": state["name"],
+                "service": state["service"]["name"],
+                "date": state["date"].strftime("%d/%m"),
+                "time": state["time"]
             }
             
-            # 🆕 CORREÇÃO 1: Removida menção a cancelamento - foco no positivo
             return (
                 f"Agendamento confirmado com sucesso, *{state['name']}*! 🎉✨\n\n"
                 "Estamos te esperando no *Studio Olhar Sob Medida* 💖\n\n"
                 f"📍 Rua Horácio de Castilho, 21 - Vila Maria Alta\n"
                 f"📅 {state['date'].strftime('%d/%m')} às {state['time']}\n\n"
                 "Vai ficar lindo! Será um prazer te receber ✨\n\n"
-                "👉 Posso te ajudar com mais alguma coisa? 😊"
+                "👉 Posso te ajudar com mais alguma coisa? 😊",
+                prepare_session_update(state)
             )
             
         if any(x in text for x in ["nao", "não", "cancelar"]):
-            conversation_state.pop(phone, None)
+            state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
             return (
                 "Tudo bem! 😊\n\n"
                 "Quando quiser agendar, é só me chamar!\n"
-                "Estamos ansiosos pelo seu retorno! ✨"
+                "Estamos ansiosos pelo seu retorno! ✨",
+                prepare_session_update(state)
             )
             
-        return "👉 Posso confirmar o agendamento? (responda *sim* ou *não*)"
-
-    # 🔧 FALLBACK: Mensagem não reconhecida
-    # Se cliente tem agendamento confirmado, mantém contexto
+        return (
+            "👉 Posso confirmar o agendamento? (responda *sim* ou *não*)",
+            prepare_session_update(state)
+        )
+    
+    # ========================================================================
+    # FALLBACK
+    # ========================================================================
+    
     if state.get("last_booking"):
         return (
             "Desculpe, não entendi sua mensagem 😊\n\n"
@@ -1009,9 +1064,12 @@ def generate_ai_response(phone: str, message: str, sender_name: str = None) -> s
             "📞 Nossos contatos\n"
             "📱 Redes sociais\n"
             "🔄 Cancelar ou reagendar\n\n"
-            "Como posso te ajudar?"
+            "Como posso te ajudar?",
+            prepare_session_update(state)
         )
     
-    # Se não tem agendamento, pode resetar
-    conversation_state.pop(phone, None)
-    return "Desculpa, não entendi 😊 Em que posso te ajudar?"
+    state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
+    return (
+        "Desculpa, não entendi 😊 Em que posso te ajudar?",
+        prepare_session_update(state)
+    )
