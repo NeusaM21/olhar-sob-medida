@@ -210,7 +210,29 @@ def standardize_sheet_dates(date_list):
 # --------------------------------------------------
 # ENGINE PRINCIPAL
 # --------------------------------------------------
-def generate_ai_response(phone: str, message: str) -> str:
+def generate_ai_response(phone: str, message: str, sender_name: str = None) -> str:
+    """
+    🆕 VERSÃO ATUALIZADA: Motor de IA com Identificação Enriquecida
+    
+    Gera resposta automatizada para mensagens do WhatsApp, gerenciando
+    todo o fluxo de agendamento e handoff para atendimento humano.
+    
+    Args:
+        phone: Telefone do cliente no formato completo (ex: 5511999666070)
+        message: Texto da mensagem enviada pelo cliente
+        sender_name: Nome do remetente capturado do WhatsApp (opcional)
+                    Quando disponível, usado como fonte primária de identificação
+    
+    Returns:
+        str: Resposta a ser enviada ao cliente
+        None: Se robô está mutado (atendimento humano ativo)
+    
+    Fontes de Identificação (por prioridade):
+        1. sender_name (do WhatsApp via Z-API) - PRIORIDADE MÁXIMA
+        2. state["name"] (fornecido durante agendamento atual)
+        3. state["last_booking"]["name"] (histórico da sessão)
+        4. "Cliente não identificado" (fallback)
+    """
     # 🔇 VERIFICA SE ROBÔ ESTÁ SILENCIADO (MUTE_ROBO = TRUE)
     from backend.integrations.sheets import is_robot_muted
     
@@ -260,15 +282,17 @@ def generate_ai_response(phone: str, message: str) -> str:
         # 🆕 ALTERAÇÃO 2: RECUPERAÇÃO INTELIGENTE DE IDENTIDADE
         # ====================================================================
         # Tenta recuperar o nome da cliente de múltiplas fontes:
-        # 1. Estado atual (se ela já forneceu durante este agendamento)
-        # 2. Último agendamento (histórico da sessão)
-        # 3. Fallback para "Cliente não identificado"
+        # 1. sender_name do WhatsApp (NOVA PRIORIDADE MÁXIMA)
+        # 2. Estado atual (se ela já forneceu durante este agendamento)
+        # 3. Último agendamento (histórico da sessão)
+        # 4. Fallback para "Cliente não identificado"
         # ====================================================================
         
         client_name = (
-            state.get("name") or 
-            state.get("last_booking", {}).get("name") or 
-            "Cliente não identificado"
+            sender_name or                                      # 🆕 FONTE #1: WhatsApp (PRIORIDADE)
+            state.get("name") or                                # FONTE #2: Estado atual
+            state.get("last_booking", {}).get("name") or        # FONTE #3: Histórico
+            "Cliente não identificado"                          # FONTE #4: Fallback
         )
         
         # ====================================================================
@@ -292,6 +316,7 @@ def generate_ai_response(phone: str, message: str) -> str:
         conversation_state.pop(phone, None)
         
         print(f"👤 [HANDOFF] Cliente '{client_name}' ({phone}) solicitou atendimento humano")
+        print(f"📊 [FONTE] Nome obtido de: {'WhatsApp' if sender_name else 'Estado/Histórico' if client_name != 'Cliente não identificado' else 'Fallback'}")
         
         return (
             "Entendi 😊\n"
