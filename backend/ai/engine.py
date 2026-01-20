@@ -56,6 +56,46 @@ def is_greeting(text: str) -> bool:
     # Verifica se texto é EXATAMENTE uma saudação (não parte de frase maior)
     return normalized in greetings
 
+def is_session_expired(session_data: dict, timeout_minutes: int = 30) -> bool:
+    """
+    🆕 Verifica se sessão expirou por inatividade
+    
+    Args:
+        session_data: Dados da sessão
+        timeout_minutes: Minutos de inatividade para considerar expirada
+    
+    Returns:
+        True se sessão expirou, False caso contrário
+    """
+    if not session_data:
+        return True
+    
+    # Se não tem timestamp, considerar não expirada (sessão nova)
+    if 'last_activity' not in session_data:
+        return False
+    
+    try:
+        last_activity = datetime.fromisoformat(session_data['last_activity'])
+        now = get_brazil_time()
+        
+        # Remove timezone info para comparação
+        if last_activity.tzinfo:
+            last_activity = last_activity.replace(tzinfo=None)
+        if now.tzinfo:
+            now = now.replace(tzinfo=None)
+        
+        elapsed = now - last_activity
+        is_expired = elapsed > timedelta(minutes=timeout_minutes)
+        
+        if is_expired:
+            print(f"⏰ [SESSION] Sessão expirada - Última atividade: {last_activity}, Agora: {now}, Diferença: {elapsed}")
+        
+        return is_expired
+        
+    except Exception as e:
+        print(f"⚠️ [SESSION] Erro ao verificar expiração: {e}")
+        return False
+
 def format_services_list():
     """
     Formata a lista de serviços agrupada por categorias
@@ -335,7 +375,8 @@ def prepare_session_update(state: dict) -> dict:
         "time": state.get("time"),
         "name": state.get("name"),
         "last_booking": state.get("last_booking"),
-        "engagement_context": state.get("engagement_context")
+        "engagement_context": state.get("engagement_context"),
+        "last_activity": get_brazil_time().isoformat()  # 🆕 Timestamp de última atividade
     }
     
     # Remove campos None para não poluir o JSON
@@ -358,7 +399,7 @@ def generate_ai_response(
     session_data: dict = None
 ) -> tuple[str, dict]:
     """
-    🆕 VERSÃO INTEGRADA COM BANCO DE DADOS
+    🆕 VERSÃO INTEGRADA COM BANCO DE DADOS + TIMEOUT DE SESSÃO
     
     Gera resposta automatizada para mensagens do WhatsApp, gerenciando
     todo o fluxo de agendamento com PERSISTÊNCIA em banco de dados.
@@ -372,18 +413,6 @@ def generate_ai_response(
     
     Returns:
         tuple: (mensagem_resposta, dados_para_atualizar_sessao)
-            - mensagem_resposta (str): Texto a ser enviado ao cliente
-            - dados_para_atualizar_sessao (dict): {
-                "current_step": str,
-                "conversation_data": dict,
-                "status": str
-              }
-    
-    Fontes de Identificação (por prioridade):
-        1. session_data["name"] (fornecido durante agendamento atual)
-        2. session_data["last_booking"]["name"] (histórico)
-        3. sender_name (do WhatsApp/agenda do celular)
-        4. "Cliente não identificado" (fallback)
     """
     
     text = normalize(message)
@@ -392,10 +421,46 @@ def generate_ai_response(
     if session_data is None:
         session_data = {}
     
+    # 🆕 VERIFICAÇÃO DE SESSÃO EXPIRADA - PRIORIDADE MÁXIMA
+    if is_session_expired(session_data, timeout_minutes=30):
+        print(f"⏰ [SESSION] Sessão expirada para {phone}, iniciando nova conversa")
+        session_data = {}
+        current_step = None
+    
     # 🆕 Converte dados da sessão para formato interno
     state = get_state_from_session(current_step, session_data)
     
-    print(f"🔍 [ENGINE] Processando: phone={phone}, step={state['status']}, data={session_data}")
+    print(f"🔍 [ENGINE] Processando: phone={phone}, step={state['status']}, message='{message[:50]}'")
+    
+    # ========================================================================
+    # 🆕 DETECÇÃO PRIORITÁRIA DE NOVA CONVERSA (SAUDAÇÃO INICIAL)
+    # ========================================================================
+    
+    initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
+    
+    # Se é saudação inicial E tem sessão antiga em estados não-críticos
+    if any(greeting in text for greeting in initial_greetings):
+        # Estados onde NÃO deve reiniciar (cliente está no meio de algo importante)
+        critical_states = ["awaiting_name", "awaiting_confirmation"]
+        
+        # Se não está em estado crítico OU sessão está velha, reiniciar
+        if state.get("status") not in critical_states or is_session_expired(session_data, timeout_minutes=5):
+            print(f"🔄 [SESSION] Saudação detectada, iniciando nova conversa")
+            state = {
+                "status": "awaiting_welcome_response",
+                "service": None,
+                "date": None,
+                "time": None,
+                "name": None
+            }
+            
+            return (
+                "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
+                "Sou a assistente virtual do estúdio 😊\n"
+                "Posso te ajudar com informações ou agendamentos.\n\n"
+                "👉 Você gostaria de conhecer nossos serviços?",
+                prepare_session_update(state)
+            )
     
     # ========================================================================
     # 🆕 DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
@@ -456,31 +521,6 @@ def generate_ai_response(
                 "status": "waiting_human"  # Marca como aguardando humano
             }
         )
-    
-    # ========================================================================
-    # DETECÇÃO DE SAUDAÇÃO INICIAL
-    # ========================================================================
-    
-    saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "ola!", "hey", "ei", "opa"]
-    
-    if any(saudacao in text for saudacao in saudacoes):
-        # 🆕 Expandida lista de estados críticos para incluir awaiting_date
-        estados_criticos = ["awaiting_name", "awaiting_confirmation", "awaiting_time", "awaiting_date"]
-        
-        if state.get("status") not in estados_criticos:
-            state["status"] = "awaiting_welcome_response"
-            state["service"] = None
-            state["date"] = None
-            state["time"] = None
-            state["name"] = None
-            
-            return (
-                "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
-                "Sou a assistente virtual do estúdio 😊\n"
-                "Posso te ajudar com informações ou agendamentos.\n\n"
-                "👉 Você gostaria de conhecer nossos serviços?",
-                prepare_session_update(state)
-            )
     
     # ========================================================================
     # CORREÇÃO: Detectar despedida após agendamento confirmado
