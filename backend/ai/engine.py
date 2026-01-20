@@ -399,7 +399,7 @@ def generate_ai_response(
     session_data: dict = None
 ) -> tuple[str, dict]:
     """
-    🆕 VERSÃO INTEGRADA COM BANCO DE DADOS + TIMEOUT DE SESSÃO
+    🆕 VERSÃO CORRIGIDA - TIMEOUT + SAUDAÇÃO FUNCIONANDO
     
     Gera resposta automatizada para mensagens do WhatsApp, gerenciando
     todo o fluxo de agendamento com PERSISTÊNCIA em banco de dados.
@@ -421,31 +421,27 @@ def generate_ai_response(
     if session_data is None:
         session_data = {}
     
-    # 🆕 VERIFICAÇÃO DE SESSÃO EXPIRADA - PRIORIDADE MÁXIMA
+    print(f"🔍 [ENGINE] Entrada - phone={phone}, step={current_step}, message='{message[:50]}'")
+    print(f"📊 [SESSION] session_data recebido: {session_data}")
+    
+    # ========================================================================
+    # 🔥 VERIFICAÇÃO CRÍTICA 1: SESSÃO EXPIRADA (PRIORIDADE MÁXIMA)
+    # ========================================================================
     if is_session_expired(session_data, timeout_minutes=30):
-        print(f"⏰ [SESSION] Sessão expirada para {phone}, iniciando nova conversa")
+        print(f"⏰ [SESSION] Sessão expirada detectada! Limpando dados antigos...")
         session_data = {}
         current_step = None
     
-    # 🆕 Converte dados da sessão para formato interno
-    state = get_state_from_session(current_step, session_data)
-    
-    print(f"🔍 [ENGINE] Processando: phone={phone}, step={state['status']}, message='{message[:50]}'")
-    
     # ========================================================================
-    # 🆕 DETECÇÃO PRIORITÁRIA DE NOVA CONVERSA (SAUDAÇÃO INICIAL)
+    # 🔥 VERIFICAÇÃO CRÍTICA 2: SAUDAÇÃO INICIAL (ANTES DE CONVERTER STATE)
     # ========================================================================
-    
     initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
     
-    # Se é saudação inicial E tem sessão antiga em estados não-críticos
-    if any(greeting in text for greeting in initial_greetings):
-        # Estados onde NÃO deve reiniciar (cliente está no meio de algo importante)
-        critical_states = ["awaiting_name", "awaiting_confirmation"]
-        
-        # Se não está em estado crítico OU sessão está velha, reiniciar
-        if state.get("status") not in critical_states or is_session_expired(session_data, timeout_minutes=5):
-            print(f"🔄 [SESSION] Saudação detectada, iniciando nova conversa")
+    # Se detectou saudação E (não tem sessão OU sessão está vazia OU step é None)
+    if any(greeting == text for greeting in initial_greetings):
+        if not session_data or not current_step or current_step == "start":
+            print(f"👋 [SAUDAÇÃO] Nova conversa detectada! Apresentando o bot...")
+            
             state = {
                 "status": "awaiting_welcome_response",
                 "service": None,
@@ -461,6 +457,13 @@ def generate_ai_response(
                 "👉 Você gostaria de conhecer nossos serviços?",
                 prepare_session_update(state)
             )
+    
+    # ========================================================================
+    # 🔥 AGORA SIM: Converte dados da sessão para formato interno
+    # ========================================================================
+    state = get_state_from_session(current_step, session_data)
+    
+    print(f"✅ [ENGINE] Estado convertido - status={state['status']}")
     
     # ========================================================================
     # 🆕 DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
