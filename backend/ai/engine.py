@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 import unicodedata
+import google.generativeai as genai
 
 from backend.integrations.sheets import (
     get_available_dates,
@@ -10,6 +11,41 @@ from backend.integrations.sheets import (
     book_appointment,
     cancel_appointment,
     set_robot_mute
+)
+
+# --------------------------------------------------
+# CONFIGURAÇÃO GEMINI API
+# --------------------------------------------------
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("AI_MODEL", "models/gemini-2.0-flash-exp")
+
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY não encontrada nas variáveis de ambiente!")
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+print(f"🤖 [GEMINI] Usando modelo: {GEMINI_MODEL}")
+
+# Configuração do modelo Gemini
+generation_config = {
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "top_k": 40,
+    "max_output_tokens": 1024,
+}
+
+safety_settings = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+
+# Inicializa modelo Gemini com configuração dinâmica
+gemini_model = genai.GenerativeModel(
+    model_name=GEMINI_MODEL,
+    generation_config=generation_config,
+    safety_settings=safety_settings
 )
 
 # --------------------------------------------------
@@ -41,7 +77,7 @@ def normalize(text: str) -> str:
 
 def is_greeting(text: str) -> bool:
     """
-    🆕 Verifica se texto é uma saudação
+    Verifica se texto é uma saudação
     Retorna: True se for saudação, False caso contrário
     """
     greetings = [
@@ -52,13 +88,11 @@ def is_greeting(text: str) -> bool:
     ]
     
     normalized = normalize(text)
-    
-    # Verifica se texto é EXATAMENTE uma saudação (não parte de frase maior)
     return normalized in greetings
 
 def is_session_expired(session_data: dict, timeout_minutes: int = 30) -> bool:
     """
-    🆕 Verifica se sessão expirou por inatividade
+    Verifica se sessão expirou por inatividade
     
     Args:
         session_data: Dados da sessão
@@ -70,7 +104,6 @@ def is_session_expired(session_data: dict, timeout_minutes: int = 30) -> bool:
     if not session_data:
         return True
     
-    # Se não tem timestamp, considerar não expirada (sessão nova)
     if 'last_activity' not in session_data:
         return False
     
@@ -78,7 +111,6 @@ def is_session_expired(session_data: dict, timeout_minutes: int = 30) -> bool:
         last_activity = datetime.fromisoformat(session_data['last_activity'])
         now = get_brazil_time()
         
-        # Remove timezone info para comparação
         if last_activity.tzinfo:
             last_activity = last_activity.replace(tzinfo=None)
         if now.tzinfo:
@@ -101,7 +133,6 @@ def format_services_list():
     Formata a lista de serviços agrupada por categorias
     Retorna: string formatada com todos os serviços organizados
     """
-    # Mapeamento de categorias para emojis
     category_emojis = {
         "Depilação": "✨",
         "Estética Facial": "💆‍♀️",
@@ -112,7 +143,6 @@ def format_services_list():
         "Manicure & Pedicure": "🌸"
     }
     
-    # Agrupa serviços por categoria
     categories = {}
     for service in SERVICES:
         category = service.get("category", "Outros")
@@ -120,11 +150,9 @@ def format_services_list():
             categories[category] = []
         categories[category].append(service)
     
-    # Formata a lista
     result = []
     service_number = 1
     
-    # Define ordem das categorias (personalizada)
     category_order = [
         "Depilação",
         "Estética Facial", 
@@ -139,14 +167,11 @@ def format_services_list():
         if category not in categories:
             continue
             
-        # Adiciona cabeçalho da categoria
         emoji = category_emojis.get(category, "✨")
         result.append(f"\n{emoji} *{category.upper()}*")
         
-        # Adiciona serviços da categoria
         for service in categories[category]:
             price = service['price']
-            # Formata preço (pode ser número ou string)
             price_str = f"R$ {price:.2f}" if isinstance(price, (int, float)) else price
             result.append(f"{service_number}. {service['name']} — {price_str}")
             service_number += 1
@@ -158,13 +183,11 @@ def detect_service_by_number_or_name(text: str):
     Detecta serviço por número (1, 2, 3...) ou por nome (sobrancelha, buço...)
     Retorna: service dict ou None
     """
-    # Tenta detectar por número
     if text.isdigit():
         service_index = int(text) - 1
         if 0 <= service_index < len(SERVICES):
             return SERVICES[service_index]
     
-    # Tenta detectar por nome
     for service in SERVICES:
         if normalize(service["name"]) in text:
             return service
@@ -176,7 +199,7 @@ def is_working_day(date_obj):
     Verifica se a data cai em dia de funcionamento (Terça a Sábado)
     Retorna: (bool, str) - (é_dia_util, nome_do_dia)
     """
-    weekday = date_obj.weekday()  # 0=Segunda, 1=Terça, ..., 6=Domingo
+    weekday = date_obj.weekday()
     
     days_pt = {
         0: "Segunda-feira",
@@ -189,8 +212,6 @@ def is_working_day(date_obj):
     }
     
     day_name = days_pt[weekday]
-    
-    # Terça(1) a Sábado(5)
     is_open = weekday >= 1 and weekday <= 5
     
     return is_open, day_name
@@ -200,7 +221,7 @@ def get_next_working_day(date_obj):
     Retorna a próxima data útil (Terça a Sábado)
     """
     next_date = date_obj
-    for _ in range(7):  # Máximo 7 dias para encontrar próximo dia útil
+    for _ in range(7):
         next_date = next_date + timedelta(days=1)
         is_open, _ = is_working_day(next_date)
         if is_open:
@@ -209,7 +230,7 @@ def get_next_working_day(date_obj):
 
 def extract_date_and_time(text: str):
     """
-    🆕 VERSÃO MELHORADA - Parsing flexível de data e horário
+    Parsing flexível de data e horário
     
     Aceita formatos naturais combinados como:
     - "dia 20 as 15h"
@@ -226,18 +247,10 @@ def extract_date_and_time(text: str):
     
     print(f"🔍 [PARSING] Analisando texto: '{text}'")
     
-    # --------------------------------------------------
-    # 🆕 EXTRAÇÃO DE HORÁRIO - Mais flexível
-    # --------------------------------------------------
-    # Padrões aceitos:
-    # - "15h", "15hs", "15h30", "15:00", "15:30"
-    # - "às 15h", "as 15", "15 horas"
-    # - "3 da tarde", "15 da tarde"
-    
-    # Regex principal para capturar horas e minutos
+    # Extração de horário
     time_patterns = [
-        r'(?:as|às)?\s*(\d{1,2})\s*(?:h|:|hs|horas)\s*(\d{2})?',  # 15h, 15:30, às 15h
-        r'(\d{1,2})\s+(?:da\s+)?(?:manha|manhã|tarde|noite)',      # 15 da tarde
+        r'(?:as|às)?\s*(\d{1,2})\s*(?:h|:|hs|horas)\s*(\d{2})?',
+        r'(\d{1,2})\s+(?:da\s+)?(?:manha|manhã|tarde|noite)',
     ]
     
     for pattern in time_patterns:
@@ -246,30 +259,23 @@ def extract_date_and_time(text: str):
             hour = int(time_match.group(1))
             minutes = int(time_match.group(2)) if len(time_match.groups()) > 1 and time_match.group(2) else 0
             
-            # Validação de horário
             if 0 <= hour <= 23 and 0 <= minutes <= 59:
                 time_part = f"{hour:02d}:{minutes:02d}"
                 print(f"✅ [PARSING] Horário extraído: {time_part}")
                 break
     
-    # --------------------------------------------------
-    # 🆕 EXTRAÇÃO DE DATA - Mais flexível
-    # --------------------------------------------------
+    # Extração de data
     now_br = get_brazil_time()
     
-    # Padrão 1: "hoje"
     if "hoje" in text:
         date_part = now_br.date()
         print(f"✅ [PARSING] Data extraída (hoje): {date_part}")
     
-    # Padrão 2: "amanhã" ou "amanha"
     elif "amanha" in text or "amanhã" in text:
         date_part = (now_br + timedelta(days=1)).date()
         print(f"✅ [PARSING] Data extraída (amanhã): {date_part}")
     
-    # Padrão 3: "dia DD" ou "dia DD/MM"
     else:
-        # Tenta extrair "dia 20" ou "dia 20/01"
         dia_pattern = r'dia\s+(\d{1,2})(?:/(\d{1,2}))?'
         dia_match = re.search(dia_pattern, text)
         
@@ -284,7 +290,6 @@ def extract_date_and_time(text: str):
             except ValueError:
                 print(f"❌ [PARSING] Data inválida: dia={day}, month={month}")
         
-        # Padrão 4: "DD/MM" sem "dia" antes
         else:
             date_match = re.search(r'(\d{1,2})/(\d{1,2})', text)
             if date_match:
@@ -306,7 +311,6 @@ def standardize_sheet_dates(date_list):
     """
     cleaned_list = []
     for d in date_list:
-        # Se vier 2025-12-31
         if "-" in d:
             try:
                 dt = datetime.strptime(d, "%Y-%m-%d")
@@ -314,26 +318,17 @@ def standardize_sheet_dates(date_list):
                 continue
             except:
                 pass
-        # Se vier 31/12/2025
         cleaned_list.append(d)
     return cleaned_list
 
 # --------------------------------------------------
-# 🆕 FUNÇÕES DE MANIPULAÇÃO DE ESTADO DA SESSÃO
+# FUNÇÕES DE MANIPULAÇÃO DE ESTADO DA SESSÃO
 # --------------------------------------------------
 
 def get_state_from_session(current_step: str, session_data: dict) -> dict:
     """
     Converte dados da sessão do banco em formato de estado interno.
-    
-    Args:
-        current_step: Etapa atual da conversa
-        session_data: Dados da conversa em formato dict
-    
-    Returns:
-        dict: Estado no formato usado internamente pelo engine
     """
-    # Converte date string de volta para objeto date se existir
     date_obj = None
     if session_data.get("date"):
         try:
@@ -354,14 +349,7 @@ def get_state_from_session(current_step: str, session_data: dict) -> dict:
 def prepare_session_update(state: dict) -> dict:
     """
     Prepara os dados do estado para serem salvos na sessão do banco.
-    
-    Args:
-        state: Estado interno do engine
-    
-    Returns:
-        dict: Dados formatados para salvar no banco
     """
-    # Converte date object para string se existir
     date_str = None
     if state.get("date"):
         try:
@@ -376,10 +364,9 @@ def prepare_session_update(state: dict) -> dict:
         "name": state.get("name"),
         "last_booking": state.get("last_booking"),
         "engagement_context": state.get("engagement_context"),
-        "last_activity": get_brazil_time().isoformat()  # 🆕 Timestamp de última atividade
+        "last_activity": get_brazil_time().isoformat()
     }
     
-    # Remove campos None para não poluir o JSON
     session_data = {k: v for k, v in session_data.items() if v is not None}
     
     return {
@@ -389,7 +376,7 @@ def prepare_session_update(state: dict) -> dict:
     }
 
 # --------------------------------------------------
-# ENGINE PRINCIPAL
+# ENGINE PRINCIPAL COM GEMINI API
 # --------------------------------------------------
 def generate_ai_response(
     phone: str,
@@ -399,7 +386,7 @@ def generate_ai_response(
     session_data: dict = None
 ) -> tuple[str, dict]:
     """
-    🆕 VERSÃO CORRIGIDA - TIMEOUT + SAUDAÇÃO FUNCIONANDO
+    🔥 VERSÃO GEMINI API - Gerenciamento completo de agendamento
     
     Gera resposta automatizada para mensagens do WhatsApp, gerenciando
     todo o fluxo de agendamento com PERSISTÊNCIA em banco de dados.
@@ -417,7 +404,6 @@ def generate_ai_response(
     
     text = normalize(message)
     
-    # 🆕 Inicializa session_data se vier None
     if session_data is None:
         session_data = {}
     
@@ -425,7 +411,7 @@ def generate_ai_response(
     print(f"📊 [SESSION] session_data recebido: {session_data}")
     
     # ========================================================================
-    # 🔥 VERIFICAÇÃO CRÍTICA 1: SESSÃO EXPIRADA (PRIORIDADE MÁXIMA)
+    # VERIFICAÇÃO CRÍTICA 1: SESSÃO EXPIRADA (PRIORIDADE MÁXIMA)
     # ========================================================================
     if is_session_expired(session_data, timeout_minutes=30):
         print(f"⏰ [SESSION] Sessão expirada detectada! Limpando dados antigos...")
@@ -433,11 +419,10 @@ def generate_ai_response(
         current_step = None
     
     # ========================================================================
-    # 🔥 VERIFICAÇÃO CRÍTICA 2: SAUDAÇÃO INICIAL (ANTES DE CONVERTER STATE)
+    # VERIFICAÇÃO CRÍTICA 2: SAUDAÇÃO INICIAL (ANTES DE CONVERTER STATE)
     # ========================================================================
     initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
     
-    # Se detectou saudação E (não tem sessão OU sessão está vazia OU step é None)
     if any(greeting == text for greeting in initial_greetings):
         if not session_data or not current_step or current_step == "start":
             print(f"👋 [SAUDAÇÃO] Nova conversa detectada! Apresentando o bot...")
@@ -459,41 +444,29 @@ def generate_ai_response(
             )
     
     # ========================================================================
-    # 🔥 AGORA SIM: Converte dados da sessão para formato interno
+    # AGORA SIM: Converte dados da sessão para formato interno
     # ========================================================================
     state = get_state_from_session(current_step, session_data)
     
     print(f"✅ [ENGINE] Estado convertido - status={state['status']}")
     
     # ========================================================================
-    # 🆕 DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
+    # DETECÇÃO PRIORITÁRIA DE TAG E INTENÇÃO DE HUMANO
     # ========================================================================
     
     human_request_keywords = [
         "#solicitar_humano#",
-        "responsavel", 
-        "responsável", 
-        "dono", 
-        "dona", 
-        "atendente", 
-        "humano", 
-        "pessoa", 
-        "alguem", 
-        "alguém", 
-        "proprietario", 
-        "proprietária", 
-        "gerente"
+        "responsavel", "responsável", "dono", "dona", 
+        "atendente", "humano", "pessoa", "alguem", "alguém", 
+        "proprietario", "proprietária", "gerente"
     ]
     
-    # Detecção prioritária de solicitação de atendimento humano
     if any(palavra in text for palavra in human_request_keywords):
-        # Recuperação inteligente de identidade
         is_in_booking_flow = state.get("service") is not None
         has_provided_name = state.get("name") is not None
         
         if is_in_booking_flow and not has_provided_name:
             client_name = "Cliente não identificado"
-            print(f"📊 [CONTEXTO] Cliente em agendamento sem identificação - usando fallback")
         else:
             client_name = (
                 state.get("name") or
@@ -502,7 +475,6 @@ def generate_ai_response(
                 "Cliente não identificado"
             )
         
-        # Registra na planilha
         set_robot_mute(
             phone=phone,
             mute_status=True,
@@ -512,21 +484,20 @@ def generate_ai_response(
         
         print(f"👤 [HANDOFF] Cliente '{client_name}' ({phone}) solicitou atendimento humano")
         
-        # 🆕 Retorna estado atualizado para indicar que está em atendimento humano
         return (
             "Entendi 😊\n"
             "Vou te direcionar para atendimento humano agora.\n"
             "⏳ Por favor, aguarde um momento que você será atendida.\n"
             "Obrigada pela paciência 💖",
             {
-                "current_step": state["status"],  # Mantém step atual
+                "current_step": state["status"],
                 "conversation_data": session_data,
-                "status": "waiting_human"  # Marca como aguardando humano
+                "status": "waiting_human"
             }
         )
     
     # ========================================================================
-    # CORREÇÃO: Detectar despedida após agendamento confirmado
+    # DETECÇÃO DE DESPEDIDA APÓS AGENDAMENTO
     # ========================================================================
     
     if state.get("status") == "completed":
@@ -581,12 +552,10 @@ def generate_ai_response(
     # ========================================================================
     
     if "cancelar" in text or "desmarcar" in text:
-        # Caso 1: Cancelamento após agendamento confirmado
         if state.get("last_booking"):
             last_booking = state["last_booking"]
             cancelado = cancel_appointment(phone)
             
-            # Limpa estado
             state = {
                 "status": "start",
                 "service": None,
@@ -618,7 +587,6 @@ def generate_ai_response(
                     prepare_session_update(state)
                 )
         
-        # Caso 2: Cancelamento durante o processo
         if state.get("service"):
             service_name = state.get("service", {}).get("name", "")
             date_str = state.get("date", "")
@@ -651,7 +619,6 @@ def generate_ai_response(
             
             return (msg, prepare_session_update(state))
         
-        # Caso 3: Sem nada em andamento
         state = {"status": "start", "service": None, "date": None, "time": None, "name": None}
         return (
             "Tudo bem! Se precisar de algo, é só chamar. 👋",
@@ -974,11 +941,10 @@ def generate_ai_response(
             )
     
     # ========================================================================
-    # 🆕 FLUXO 4: DATA (COM PARSING FLEXÍVEL E VALIDAÇÃO DE SAUDAÇÃO)
+    # FLUXO 4: DATA (COM PARSING FLEXÍVEL)
     # ========================================================================
     
     if state["status"] == "awaiting_date":
-        # 🆕 Parsing flexível - extrai data e horário (podem vir juntos)
         date, time = extract_date_and_time(text)
         
         if not date:
@@ -989,7 +955,6 @@ def generate_ai_response(
                 prepare_session_update(state)
             )
         
-        # Valida se é dia de funcionamento
         is_open, day_name = is_working_day(date)
         
         if not is_open:
@@ -1002,7 +967,6 @@ def generate_ai_response(
                 prepare_session_update(state)
             )
 
-        # Valida se data está disponível na planilha
         raw_available_dates = get_available_dates() 
         clean_available_dates = standardize_sheet_dates(raw_available_dates)
         
@@ -1017,10 +981,8 @@ def generate_ai_response(
                 prepare_session_update(state)
             )
         
-        # Salva a data
         state["date"] = date
         
-        # 🆕 SE HORÁRIO VEIO JUNTO, VALIDA E PULA PARA O NOME
         if time:
             print(f"✅ [FLUXO] Cliente informou data E horário juntos!")
             
@@ -1042,7 +1004,6 @@ def generate_ai_response(
                     prepare_session_update(state)
                 )
 
-            # Horário válido! Pula direto para nome
             state["time"] = time
             state["status"] = "awaiting_name"
             
@@ -1055,7 +1016,6 @@ def generate_ai_response(
                 prepare_session_update(state)
             )
         
-        # SE NÃO VEIO HORÁRIO, PERGUNTA
         state["status"] = "awaiting_time"
         
         return (
@@ -1111,11 +1071,10 @@ def generate_ai_response(
         )
     
     # ========================================================================
-    # 🆕 FLUXO 6: NOME DO CLIENTE (COM VALIDAÇÃO DE SAUDAÇÃO)
+    # FLUXO 6: NOME DO CLIENTE
     # ========================================================================
     
     if state["status"] == "awaiting_name":
-        # 🆕 VALIDAÇÃO: Rejeitar saudações
         if is_greeting(message):
             return (
                 "Opa! Isso é uma saudação 😊\n\n"
@@ -1152,11 +1111,10 @@ def generate_ai_response(
         )
     
     # ========================================================================
-    # 🆕 FLUXO 7: CONFIRMAÇÃO (COM VALIDAÇÃO DE SAUDAÇÃO)
+    # FLUXO 7: CONFIRMAÇÃO
     # ========================================================================
     
     if state["status"] == "awaiting_confirmation":
-        # 🆕 VALIDAÇÃO: Rejeitar saudações
         if is_greeting(message):
             return (
                 f"Entendi a saudação! 😊\n\n"
@@ -1179,7 +1137,6 @@ def generate_ai_response(
                 time=state["time"]
             )
             
-            # Salva informações do último agendamento
             state["status"] = "completed"
             state["last_booking"] = {
                 "name": state["name"],
