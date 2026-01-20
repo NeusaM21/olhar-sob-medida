@@ -151,36 +151,95 @@ def get_next_working_day(date_obj):
     return None
 
 def extract_date_and_time(text: str):
+    """
+    🆕 VERSÃO MELHORADA - Parsing flexível de data e horário
+    
+    Aceita formatos naturais combinados como:
+    - "dia 20 as 15h"
+    - "20/01 15h"
+    - "amanhã às 15"
+    - "dia 20" (só data)
+    - "15h" (só horário)
+    
+    Retorna: (date_part, time_part)
+    """
     text = normalize(text)
     date_part = None
     time_part = None
     
-    # --- horário (Aceita 16h, 16:00, 16h30, 16:30, 16hs) ---
-    # Regex atualizado para capturar minutos opcionais
-    time_match = re.search(r'(\d{1,2})\s*(?:h|:|hs|horas)\s*(\d{2})?', text)
-    if time_match:
-        hour = int(time_match.group(1))
-        minutes = int(time_match.group(2)) if time_match.group(2) else 0
-        if 0 <= hour <= 23 and 0 <= minutes <= 59:
-            time_part = f"{hour:02d}:{minutes:02d}"
+    print(f"🔍 [PARSING] Analisando texto: '{text}'")
+    
+    # --------------------------------------------------
+    # 🆕 EXTRAÇÃO DE HORÁRIO - Mais flexível
+    # --------------------------------------------------
+    # Padrões aceitos:
+    # - "15h", "15hs", "15h30", "15:00", "15:30"
+    # - "às 15h", "as 15", "15 horas"
+    # - "3 da tarde", "15 da tarde"
+    
+    # Regex principal para capturar horas e minutos
+    time_patterns = [
+        r'(?:as|às)?\s*(\d{1,2})\s*(?:h|:|hs|horas)\s*(\d{2})?',  # 15h, 15:30, às 15h
+        r'(\d{1,2})\s+(?:da\s+)?(?:manha|manhã|tarde|noite)',      # 15 da tarde
+    ]
+    
+    for pattern in time_patterns:
+        time_match = re.search(pattern, text)
+        if time_match:
+            hour = int(time_match.group(1))
+            minutes = int(time_match.group(2)) if len(time_match.groups()) > 1 and time_match.group(2) else 0
             
-    # --- data ---
+            # Validação de horário
+            if 0 <= hour <= 23 and 0 <= minutes <= 59:
+                time_part = f"{hour:02d}:{minutes:02d}"
+                print(f"✅ [PARSING] Horário extraído: {time_part}")
+                break
+    
+    # --------------------------------------------------
+    # 🆕 EXTRAÇÃO DE DATA - Mais flexível
+    # --------------------------------------------------
     now_br = get_brazil_time()
     
+    # Padrão 1: "hoje"
     if "hoje" in text:
         date_part = now_br.date()
-    elif "amanha" in text:
+        print(f"✅ [PARSING] Data extraída (hoje): {date_part}")
+    
+    # Padrão 2: "amanhã" ou "amanha"
+    elif "amanha" in text or "amanhã" in text:
         date_part = (now_br + timedelta(days=1)).date()
+        print(f"✅ [PARSING] Data extraída (amanhã): {date_part}")
+    
+    # Padrão 3: "dia DD" ou "dia DD/MM"
     else:
-        date_match = re.search(r'(\d{1,2})/(\d{1,2})', text)
-        if date_match:
-            day, month = map(int, date_match.groups())
+        # Tenta extrair "dia 20" ou "dia 20/01"
+        dia_pattern = r'dia\s+(\d{1,2})(?:/(\d{1,2}))?'
+        dia_match = re.search(dia_pattern, text)
+        
+        if dia_match:
+            day = int(dia_match.group(1))
+            month = int(dia_match.group(2)) if dia_match.group(2) else now_br.month
             year = now_br.year
+            
             try:
                 date_part = datetime(year, month, day).date()
+                print(f"✅ [PARSING] Data extraída (dia X): {date_part}")
             except ValueError:
-                pass
+                print(f"❌ [PARSING] Data inválida: dia={day}, month={month}")
+        
+        # Padrão 4: "DD/MM" sem "dia" antes
+        else:
+            date_match = re.search(r'(\d{1,2})/(\d{1,2})', text)
+            if date_match:
+                day, month = map(int, date_match.groups())
+                year = now_br.year
+                try:
+                    date_part = datetime(year, month, day).date()
+                    print(f"✅ [PARSING] Data extraída (DD/MM): {date_part}")
+                except ValueError:
+                    print(f"❌ [PARSING] Data inválida: {day}/{month}")
 
+    print(f"📊 [PARSING] Resultado final - Data: {date_part}, Horário: {time_part}")
     return date_part, time_part
 
 def standardize_sheet_dates(date_list):
@@ -854,18 +913,22 @@ def generate_ai_response(
             )
     
     # ========================================================================
-    # FLUXO 4: DATA
+    # 🆕 FLUXO 4: DATA (VERSÃO MELHORADA - ACEITA DATA + HORÁRIO JUNTOS)
     # ========================================================================
     
     if state["status"] == "awaiting_date":
+        # 🆕 Parsing flexível - extrai data e horário (podem vir juntos)
         date, time = extract_date_and_time(text)
         
         if not date:
             return (
-                "Não consegui entender a data 😕 Pode me dizer novamente? (Ex: hoje, amanhã, 02/01)",
+                "Não consegui entender a data 😕\n\n"
+                "Por favor, me diga a data que você prefere.\n"
+                "💡 Exemplos: *hoje*, *amanhã*, *20/01*, *dia 20*",
                 prepare_session_update(state)
             )
         
+        # Valida se é dia de funcionamento
         is_open, day_name = is_working_day(date)
         
         if not is_open:
@@ -878,40 +941,47 @@ def generate_ai_response(
                 prepare_session_update(state)
             )
 
+        # Valida se data está disponível na planilha
         raw_available_dates = get_available_dates() 
         clean_available_dates = standardize_sheet_dates(raw_available_dates)
         
         user_date_str = date.strftime("%d/%m/%Y")
         
-        print(f"DEBUG: Data Usuário: {user_date_str} | Datas Planilha Limpas: {clean_available_dates}")
+        print(f"📊 [VALIDAÇÃO] Data usuário: {user_date_str} | Datas disponíveis: {clean_available_dates}")
 
         if user_date_str not in clean_available_dates:
             return (
-                f"Essa data ({date.strftime('%d/%m')}) não está disponível ou não temos agenda aberta 😕\n"
+                f"Essa data (*{date.strftime('%d/%m')}*) não está disponível ou não temos agenda aberta 😕\n\n"
                 "👉 Pode escolher outra data, por favor?",
                 prepare_session_update(state)
             )
-            
+        
+        # Salva a data
         state["date"] = date
         
+        # 🆕 SE HORÁRIO VEIO JUNTO, VALIDA E PULA PARA O NOME
         if time:
+            print(f"✅ [FLUXO] Cliente informou data E horário juntos!")
+            
             try:
                 available_times = get_available_times_for_date(date.strftime("%d/%m/%Y"))
             except Exception as e:
                 print(f"❌ [ERROR] Falha ao buscar horários: {e}")
                 return (
-                    f"Desculpe, tive um problema ao verificar os horários disponíveis para {date.strftime('%d/%m')} 😕\n\n"
+                    f"Desculpe, tive um problema ao verificar os horários disponíveis para *{date.strftime('%d/%m')}* 😕\n\n"
                     "Por favor, tente novamente ou escolha apenas a data primeiro.",
                     prepare_session_update(state)
                 )
             
             if time not in available_times:
                  return (
-                    f"Consegui a data {date.strftime('%d/%m')}, mas o horário *{time}* já está ocupado 😕\n"
-                    f"Horários livres: {', '.join(available_times)}",
+                    f"Consegui a data *{date.strftime('%d/%m')}*, mas o horário *{time}* já está ocupado 😕\n\n"
+                    f"📋 Horários disponíveis: {', '.join(available_times)}\n\n"
+                    "👉 Qual horário você prefere?",
                     prepare_session_update(state)
                 )
 
+            # Horário válido! Pula direto para nome
             state["time"] = time
             state["status"] = "awaiting_name"
             
@@ -923,12 +993,14 @@ def generate_ai_response(
                 "(Nome e sobrenome, por favor)",
                 prepare_session_update(state)
             )
-            
+        
+        # SE NÃO VEIO HORÁRIO, PERGUNTA
         state["status"] = "awaiting_time"
         
         return (
             f"Perfeito! ✨ Data escolhida: *{date.strftime('%d/%m')}*\n\n"
-            "👉 Qual horário você prefere?",
+            "👉 Qual horário você prefere?\n"
+            "💡 Funcionamos das *9h às 19h*",
             prepare_session_update(state)
         )
     
@@ -941,7 +1013,9 @@ def generate_ai_response(
         
         if not time:
             return (
-                "Não consegui entender o horário 😕 Pode me dizer novamente? (Ex: 16h)",
+                "Não consegui entender o horário 😕\n\n"
+                "Por favor, me diga o horário que você prefere.\n"
+                "💡 Exemplos: *15h*, *15:00*, *3 da tarde*",
                 prepare_session_update(state)
             )
         
@@ -957,8 +1031,9 @@ def generate_ai_response(
         
         if time not in available_times:
              return (
-                f"Esse horário não está disponível 😕\n"
-                f"Horários disponíveis: {', '.join(available_times)}",
+                f"Esse horário (*{time}*) não está disponível 😕\n\n"
+                f"📋 Horários disponíveis: {', '.join(available_times)}\n\n"
+                "👉 Qual horário você prefere?",
                 prepare_session_update(state)
             )
 
@@ -987,7 +1062,7 @@ def generate_ai_response(
         if len(name_parts) < 2:
             return (
                 "Por favor, me informe seu *nome completo* (nome e sobrenome) 😊\n"
-                "Exemplo: Maria Silva",
+                "💡 Exemplo: Maria Silva",
                 prepare_session_update(state)
             )
         
