@@ -39,6 +39,23 @@ def normalize(text: str) -> str:
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
     return text
 
+def is_greeting(text: str) -> bool:
+    """
+    🆕 Verifica se texto é uma saudação
+    Retorna: True se for saudação, False caso contrário
+    """
+    greetings = [
+        "oi", "ola", "olá", "oi!", "ola!",
+        "bom dia", "boa tarde", "boa noite",
+        "hey", "ei", "opa", "e ai", "e aí",
+        "alo", "alô", "hello", "hi"
+    ]
+    
+    normalized = normalize(text)
+    
+    # Verifica se texto é EXATAMENTE uma saudação (não parte de frase maior)
+    return normalized in greetings
+
 def format_services_list():
     """
     Formata a lista de serviços agrupada por categorias
@@ -447,7 +464,8 @@ def generate_ai_response(
     saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "ola!", "hey", "ei", "opa"]
     
     if any(saudacao in text for saudacao in saudacoes):
-        estados_criticos = ["awaiting_name", "awaiting_confirmation", "awaiting_time"]
+        # 🆕 Expandida lista de estados críticos para incluir awaiting_date
+        estados_criticos = ["awaiting_name", "awaiting_confirmation", "awaiting_time", "awaiting_date"]
         
         if state.get("status") not in estados_criticos:
             state["status"] = "awaiting_welcome_response"
@@ -913,7 +931,7 @@ def generate_ai_response(
             )
     
     # ========================================================================
-    # 🆕 FLUXO 4: DATA (VERSÃO MELHORADA - ACEITA DATA + HORÁRIO JUNTOS)
+    # 🆕 FLUXO 4: DATA (COM PARSING FLEXÍVEL E VALIDAÇÃO DE SAUDAÇÃO)
     # ========================================================================
     
     if state["status"] == "awaiting_date":
@@ -1050,10 +1068,20 @@ def generate_ai_response(
         )
     
     # ========================================================================
-    # FLUXO 6: NOME DO CLIENTE
+    # 🆕 FLUXO 6: NOME DO CLIENTE (COM VALIDAÇÃO DE SAUDAÇÃO)
     # ========================================================================
     
     if state["status"] == "awaiting_name":
+        # 🆕 VALIDAÇÃO: Rejeitar saudações
+        if is_greeting(message):
+            return (
+                "Opa! Isso é uma saudação 😊\n\n"
+                "Preciso do seu *nome completo* para finalizar o agendamento.\n\n"
+                "💡 Exemplo: *Maria Silva* ou *João Santos*\n\n"
+                "👉 Qual é o seu nome?",
+                prepare_session_update(state)
+            )
+        
         name = message.strip()
         for phrase in ["meu nome e", "meu nome é", "me chamo", "sou", "eu sou"]:
             name = name.replace(phrase, "").strip()
@@ -1081,10 +1109,24 @@ def generate_ai_response(
         )
     
     # ========================================================================
-    # FLUXO 7: CONFIRMAÇÃO
+    # 🆕 FLUXO 7: CONFIRMAÇÃO (COM VALIDAÇÃO DE SAUDAÇÃO)
     # ========================================================================
     
     if state["status"] == "awaiting_confirmation":
+        # 🆕 VALIDAÇÃO: Rejeitar saudações
+        if is_greeting(message):
+            return (
+                f"Entendi a saudação! 😊\n\n"
+                f"Mas preciso saber: você quer confirmar este agendamento?\n\n"
+                f"📝 Resumo:\n"
+                f"👤 Nome: *{state['name']}*\n"
+                f"✨ Serviço: *{state['service']['name']}*\n"
+                f"📅 Data: *{state['date'].strftime('%d/%m')}*\n"
+                f"⏰ Horário: *{state['time']}*\n\n"
+                f"👉 Responda *sim* para confirmar ou *não* para cancelar",
+                prepare_session_update(state)
+            )
+        
         if any(x in text for x in ["sim", "confirmar", "ok", "pode"]):
             book_appointment(
                 phone=phone,
