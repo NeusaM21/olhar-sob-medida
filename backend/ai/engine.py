@@ -411,20 +411,20 @@ def generate_ai_response(
     print(f"📊 [SESSION] session_data recebido: {session_data}")
     
     # ========================================================================
-    # VERIFICAÇÃO CRÍTICA 1: SESSÃO EXPIRADA (PRIORIDADE MÁXIMA)
+    # 🔥 CORREÇÃO 1: VERIFICAÇÃO CRÍTICA - SESSÃO EXPIRADA OU CONCLUÍDA
     # ========================================================================
-    if is_session_expired(session_data, timeout_minutes=30):
-        print(f"⏰ [SESSION] Sessão expirada detectada! Limpando dados antigos...")
+    if is_session_expired(session_data, timeout_minutes=30) or current_step == "completed":
+        print(f"⏰ [SESSION] Sessão expirada/concluída detectada! Limpando dados antigos...")
         session_data = {}
         current_step = None
     
     # ========================================================================
-    # VERIFICAÇÃO CRÍTICA 2: SAUDAÇÃO INICIAL (ANTES DE CONVERTER STATE)
+    # 🔥 CORREÇÃO 2: SAUDAÇÃO INICIAL (INCLUINDO "completed" NA CONDIÇÃO)
     # ========================================================================
     initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
     
     if any(greeting == text for greeting in initial_greetings):
-        if not session_data or not current_step or current_step == "start":
+        if not session_data or not current_step or current_step in ["start", "completed"]:
             print(f"👋 [SAUDAÇÃO] Nova conversa detectada! Apresentando o bot...")
             
             state = {
