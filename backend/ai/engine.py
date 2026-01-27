@@ -90,6 +90,33 @@ def is_greeting(text: str) -> bool:
     normalized = normalize(text)
     return normalized in greetings
 
+def is_negative_response(text: str) -> bool:
+    """
+    Verifica se texto é uma resposta negativa/despedida
+    Retorna: True se for resposta negativa, False caso contrário
+    """
+    negative_phrases = [
+        "nao", "não", "nao obrigada", "não obrigada",
+        "nao obrigado", "não obrigado", "obrigada",
+        "obrigado", "valeu", "vlw", "ta bom", "tá bom",
+        "ta bem", "tá bem", "beleza", "tranquilo",
+        "so isso", "só isso", "ok", "okay",
+        "tudo certo", "tudo bem", "de boa"
+    ]
+    
+    normalized = normalize(text)
+    
+    # Verifica se a mensagem contém APENAS resposta negativa (sem outras palavras significativas)
+    words = normalized.split()
+    
+    # Se mensagem tem 1-3 palavras e contém negativa, considera negativa
+    if len(words) <= 3:
+        for phrase in negative_phrases:
+            if phrase in normalized:
+                return True
+    
+    return False
+
 def is_session_expired(session_data: dict, timeout_minutes: int = 30) -> bool:
     """
     Verifica se sessão expirou por inatividade
@@ -411,7 +438,39 @@ def generate_ai_response(
     print(f"📊 [SESSION] session_data recebido: {session_data}")
     
     # ========================================================================
-    # 🔥 CORREÇÃO PRINCIPAL: SAUDAÇÕES SEMPRE INICIAM NOVA CONVERSA
+    # 🔥 CORREÇÃO CRÍTICA: RESPOSTAS NEGATIVAS APÓS AGENDAMENTO TÊM PRIORIDADE
+    # ========================================================================
+    # IMPORTANTE: Esta verificação DEVE vir ANTES da verificação de saudações
+    # para evitar que "não obrigada" seja tratado como nova conversa
+    
+    if current_step == "completed" and is_negative_response(text):
+        print(f"✅ [DESPEDIDA] Cliente recusou ajuda adicional após agendamento")
+        
+        name = session_data.get("last_booking", {}).get("name", "")
+        date = session_data.get("last_booking", {}).get("date", "")
+        time = session_data.get("last_booking", {}).get("time", "")
+        
+        state = get_state_from_session(current_step, session_data)
+        state["status"] = "farewell_sent"
+        
+        if name and date and time:
+            return (
+                f"Perfeito, *{name}*! 💖\n\n"
+                "Foi um prazer te atender!\n"
+                f"Nos vemos em *{date}* às *{time}* ✨\n\n"
+                "Até lá! 👋",
+                prepare_session_update(state)
+            )
+        else:
+            return (
+                "Perfeito! 💖\n\n"
+                "Foi um prazer te atender!\n"
+                "Qualquer coisa é só chamar. Até logo! 👋",
+                prepare_session_update(state)
+            )
+    
+    # ========================================================================
+    # 🔥 SAUDAÇÕES SEMPRE INICIAM NOVA CONVERSA (exceto após resposta negativa)
     # ========================================================================
     initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
     
@@ -441,8 +500,8 @@ def generate_ai_response(
     # ========================================================================
     # VERIFICAÇÃO SECUNDÁRIA: SESSÃO EXPIRADA OU CONCLUÍDA
     # ========================================================================
-    if is_session_expired(session_data, timeout_minutes=30) or current_step == "completed":
-        print(f"⏰ [SESSION] Sessão expirada/concluída detectada! Limpando dados antigos...")
+    if is_session_expired(session_data, timeout_minutes=30):
+        print(f"⏰ [SESSION] Sessão expirada detectada! Limpando dados antigos...")
         session_data = {}
         current_step = None
     
@@ -500,32 +559,23 @@ def generate_ai_response(
         )
     
     # ========================================================================
-    # DETECÇÃO DE DESPEDIDA APÓS AGENDAMENTO
+    # DETECÇÃO DE DESPEDIDA LEGADA (compatibilidade)
     # ========================================================================
     
     if state.get("status") == "completed":
-        if any(x in text for x in ["nao", "não", "obrigado", "obrigada", "valeu", "vlw", "ta bom", "tá bom", "beleza", "so isso", "só isso", "ok"]):
+        # Esta seção não deve mais ser atingida para respostas negativas simples
+        # pois elas são tratadas no topo, mas mantemos para outros casos
+        if any(x in text for x in ["nao quero", "não quero", "nao preciso", "não preciso"]):
             name = state.get("last_booking", {}).get("name", "")
-            date = state.get("last_booking", {}).get("date", "")
-            time = state.get("last_booking", {}).get("time", "")
             
             state["status"] = "farewell_sent"
             
-            if name and date and time:
-                return (
-                    f"Perfeito, *{name}*! 💖\n\n"
-                    "Foi um prazer te atender!\n"
-                    f"Nos vemos em *{date}* às *{time}* ✨\n\n"
-                    "Até lá! 👋",
-                    prepare_session_update(state)
-                )
-            else:
-                return (
-                    "Perfeito! 💖\n\n"
-                    "Foi um prazer te atender!\n"
-                    "Até breve! 👋",
-                    prepare_session_update(state)
-                )
+            return (
+                f"Tudo bem, {name}! 😊\n\n"
+                "Foi um prazer te atender!\n"
+                "Qualquer coisa é só chamar. Até logo! 👋",
+                prepare_session_update(state)
+            )
     
     if state.get("status") == "farewell_sent":
         if state.get("last_booking"):
