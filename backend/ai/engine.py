@@ -411,7 +411,35 @@ def generate_ai_response(
     print(f"📊 [SESSION] session_data recebido: {session_data}")
     
     # ========================================================================
-    # 🔥 CORREÇÃO 1: VERIFICAÇÃO CRÍTICA - SESSÃO EXPIRADA OU CONCLUÍDA
+    # 🔥 CORREÇÃO PRINCIPAL: SAUDAÇÕES SEMPRE INICIAM NOVA CONVERSA
+    # ========================================================================
+    initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
+    
+    if any(greeting == text for greeting in initial_greetings):
+        print(f"👋 [SAUDAÇÃO] Detectada! Limpando sessão e iniciando nova conversa...")
+        
+        # SEMPRE limpa sessão quando detecta saudação
+        session_data = {}
+        current_step = None
+        
+        state = {
+            "status": "awaiting_welcome_response",
+            "service": None,
+            "date": None,
+            "time": None,
+            "name": None
+        }
+        
+        return (
+            "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
+            "Sou a assistente virtual do estúdio 😊\n"
+            "Posso te ajudar com informações ou agendamentos.\n\n"
+            "👉 Você gostaria de conhecer nossos serviços?",
+            prepare_session_update(state)
+        )
+    
+    # ========================================================================
+    # VERIFICAÇÃO SECUNDÁRIA: SESSÃO EXPIRADA OU CONCLUÍDA
     # ========================================================================
     if is_session_expired(session_data, timeout_minutes=30) or current_step == "completed":
         print(f"⏰ [SESSION] Sessão expirada/concluída detectada! Limpando dados antigos...")
@@ -419,32 +447,7 @@ def generate_ai_response(
         current_step = None
     
     # ========================================================================
-    # 🔥 CORREÇÃO 2: SAUDAÇÃO INICIAL (INCLUINDO "completed" NA CONDIÇÃO)
-    # ========================================================================
-    initial_greetings = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite"]
-    
-    if any(greeting == text for greeting in initial_greetings):
-        if not session_data or not current_step or current_step in ["start", "completed"]:
-            print(f"👋 [SAUDAÇÃO] Nova conversa detectada! Apresentando o bot...")
-            
-            state = {
-                "status": "awaiting_welcome_response",
-                "service": None,
-                "date": None,
-                "time": None,
-                "name": None
-            }
-            
-            return (
-                "✨ Olá! É um prazer receber você no Studio Olhar Sob Medida ✨\n\n"
-                "Sou a assistente virtual do estúdio 😊\n"
-                "Posso te ajudar com informações ou agendamentos.\n\n"
-                "👉 Você gostaria de conhecer nossos serviços?",
-                prepare_session_update(state)
-            )
-    
-    # ========================================================================
-    # AGORA SIM: Converte dados da sessão para formato interno
+    # Converte dados da sessão para formato interno
     # ========================================================================
     state = get_state_from_session(current_step, session_data)
     
